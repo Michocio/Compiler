@@ -30,15 +30,56 @@ import TypesStuff
 import IntermediateEnv
 import Misc
 
+type SimpleBlocks = M.Map Argument [Tuple]
+type ControlFlow = (Argument, [Argument])
+
+
 generateIntermediate :: ProgramD -> IO ()
 generateIntermediate p =  (liftIO $ evalStateT (genProgram p) initialEnvMid)
 
 genProgram :: ProgramD -> StateT EnvMid IO ()
 genProgram (Program info []) = return ()
-genProgram  (Program info (x:xs)) = genTopDef (x:xs)
+genProgram  (Program info (x:xs)) = do
+    --lEntry <- genLabel "entry"
+    genTopDef (x:xs)
 
 genTopDef :: [TopDefD] -> StateT EnvMid  IO ()
-genTopDef [] = do
+genTopDef [] = return ()
+genTopDef  (x:xs) = do
+    genTopInstr x
+    genTopDef xs
+
+genBlocks :: [(Argument, (Int, Int))] -> [Tuple] -> SimpleBlocks -> SimpleBlocks
+genBlocks [] _ graph = graph
+genBlocks ((arg, (start, end)):xs) code graph =
+    genBlocks xs (drop (end - start + 1) code) (M.insert arg (take (end - start + 1) code) graph)
+
+returnJump :: Int -> [Int] -> [Tuple] -> [Int]
+returnJump _ old [] = old
+--returnJump x old (((IfOp how), a1, a2, (Label _ pos)):xs) = returnJump (x+1) (x:old) xs
+--returnJump x old ((GotoOp, (Label _ pos), _, _):xs) = returnJump (x+1) (x:old) xs
+--returnJump x old ((RetOp, _, _, _):xs) = returnJump (x+1) (x:old) xs
+returnJump y old (x:xs) = returnJump (y+1) old xs
+
+genTopInstr :: TopDefD -> StateT EnvMid IO ()
+genTopInstr fun@(FnDef a type_ ident@(Ident name) args (Block t block)) = do
+    --line <- numberOfLine
+    --l <- genLabel ("Funkcja " ++ name)
+    --emit(Function, Fun name, NIL, NIL)
+    put initialEnvMid
+    mapM genStmt block
+    --line_ <- numberOfLine
+    --if(line == line_) then emit(EmptyOp, NIL, NIL, NIL)
+    --else return ()
+    liftIO $ putStrLn $ "##########" ++ (show name) ++ ": "
+    printCode
+    return ()
+
+printCode :: StateT EnvMid IO ()
+printCode = do
+    (a, b, c, d, e) <- get
+    if(M.size e == 0) then put (a, b, c+1, d, M.insert 0 ("entry", 0) e) else return ()
+    z <- genLabel "end"
     (a, b, c, d, e) <- get
     lines_ <- return $ map (printTuple) d
     lin <-return $  lines_
@@ -48,15 +89,18 @@ genTopDef [] = do
     ok <- return $ insertLabels 0 so lin
     liftIO $ mapM print ok
     liftIO $ putStrLn $ show e
-genTopDef  (x:xs) = do
-    genTopInstr x
-    genTopDef xs
+    starts <- return $ sort $ map (\(_, pos) -> pos) (M.elems e)
+    ends <- return $ sort $ returnJump 0 [] d
+    --liftIO $ putStrLn $ show starts
+    ext <- return $  tail $ (sort $ ends ++ (map (subtract 1) starts))
+    len <- numberOfLine
+    begs <- return $ filter (\(a) -> (a <= len)) starts
+    endings <- return $ filter (\(a) -> (a >= 0)) ext
+    begs_ <- return $(take (length endings) begs)
+    ends_ <- return $ (take (length begs_) endings)
+    liftIO  $ putStrLn $ show begs_
+    liftIO  $ putStrLn $ show ends_
 
-genTopInstr :: TopDefD -> StateT EnvMid IO ()
-genTopInstr fun@(FnDef a type_ ident@(Ident name) args (Block t block)) = do
-    emit(Function, Fun name, NIL, NIL)
-    mapM genStmt block
-    return ()
 
 genStmt ::Stmt (Maybe(Int, Int)) -> StateT EnvMid IO ()
 genStmt  (BStmt x (Block a stmts)) = do
@@ -95,29 +139,61 @@ genStmt (Decr a val) = do
     emit(Store, t, Var (snd $ stringLValue val), NIL)
 genStmt  (Empty a) = return ()
 genStmt  (Cond info cond ifBlock) = do
-    lTrue_ <- reserveLabel "l"
-    lTrue <- return $ Label  "l" lTrue_
-    lEnd_ <- reserveLabel "l"
-    lEnd <- return $ Label  "l" lEnd_
-    genCond cond lTrue lEnd lEnd
-    updateLabel lTrue_
-    genStmt (BStmt Nothing $ Block Nothing [ifBlock])
-    updateLabel lEnd_
+    case (cond) of
+        (ELitTrue a) -> do
+            lTrue_ <- genLabel "l"
+            genStmt (BStmt Nothing $ Block Nothing [ifBlock])
+        (ELitFalse a) -> return ()
+        otherwise -> do
+            lTrue_ <- reserveLabel "l"
+            lTrue <- return $ Label  "l" lTrue_
+            lEnd_ <- reserveLabel "l"
+            lEnd <- return $ Label  "l" lEnd_
+            genCond cond lTrue lEnd lEnd
+            updateLabel lTrue_
+            genStmt (BStmt Nothing $ Block Nothing [ifBlock])
+            updateLabel lEnd_
 genStmt (CondElse info cond ifBlock elseBlock) = do
-    lTrue_ <- reserveLabel "l"
-    lTrue <- return $ Label  "l" lTrue_
-    lFalse_ <- reserveLabel "l"
-    lFalse <- return $ Label  "l" lFalse_
+    case (cond) of
+        (ELitTrue a) -> do
+            lTrue_ <- genLabel "l"
+            genStmt (BStmt Nothing $ Block Nothing [ifBlock])
+        (ELitFalse a) -> do
+            lFalse_ <-  genLabel "l"
+            genStmt (BStmt Nothing $ Block Nothing [elseBlock])
+        otherwise -> do
+            lTrue_ <- reserveLabel "l"
+            lTrue <- return $ Label  "l" lTrue_
+            lFalse_ <- reserveLabel "l"
+            lFalse <- return $ Label  "l" lFalse_
+            lEnd_ <- reserveLabel "l"
+            lEnd <- return $ Label  "l" lEnd_
+            genCond cond lTrue lFalse lFalse
+            updateLabel lTrue_
+            genStmt (BStmt Nothing $ Block Nothing [ifBlock])
+            updateLabel lFalse_
+            genStmt (BStmt Nothing $ Block Nothing [elseBlock])
+            updateLabel lEnd_
+genStmt (While a expr stmt) = do
+    l1_ <- reserveLabel "l"
+    l1 <- return $ Label  "l" l1_
+    l2_ <- reserveLabel "l"
+    l2 <- return $ Label  "l" l2_
     lEnd_ <- reserveLabel "l"
     lEnd <- return $ Label  "l" lEnd_
-    genCond cond lTrue lFalse lFalse
-    updateLabel lTrue_
-    genStmt (BStmt Nothing $ Block Nothing [ifBlock])
-    updateLabel lFalse_
-    genStmt (BStmt Nothing $ Block Nothing [elseBlock])
+    emit(GotoOp, l2, NIL, NIL)
+    updateLabel l1_
+    genStmt (BStmt Nothing $ Block Nothing [stmt])
+    updateLabel l2_
+    genCond expr l1 lEnd lEnd
     updateLabel lEnd_
 
+
 genCond :: Expr (Maybe (Int, Int)) -> Argument -> Argument -> Argument -> StateT EnvMid IO ()
+genCond (ELitTrue a) lTrue lFalse lNext =
+    emit(GotoOp, lTrue, NIL, NIL)
+genCond (ELitFalse a) lTrue lFalse lNext = --do
+    emit(GotoOp, lFalse, NIL, NIL)
 genCond (EAnd _ e1 e2) lTrue lFalse lNext = do
     lMid_ <- (reserveLabel "l")
     lMid <- return $ Label  "l" lMid_

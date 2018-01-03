@@ -48,6 +48,7 @@ data Operand
     | Load
     | Store
     | Function
+    | EmptyOp
   deriving (Eq, Ord, Show, Read)
 data CmpOp  = LTHm | LEm | GTHm | GEm | EQUm | NEm
      deriving (Eq, Ord, Show, Read)
