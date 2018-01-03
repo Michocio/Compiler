@@ -167,3 +167,4 @@ printTuple (op@(Store), a1, res, _) = "     " ++
 printTuple (op@(Function), a1, _, _) = ("########Funkcja   :" ++ (printArg a1))
 printTuple (op@(GetElemPtr), arr, index, res) =  "     " ++
     (printArg res) ++ " = " ++ ("GetElemPtr") ++ " " ++ " " ++ (printArg arr) ++ " " ++ " " ++ (printArg index)
+printTuple (EmptyOp, _, _, _) = "Empty"

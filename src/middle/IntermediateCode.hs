@@ -23,6 +23,7 @@ import Data.List
 import Data.Maybe
 import System.Exit ( exitFailure, exitSuccess )
 import Data.Tuple
+import Data.Function (on)
 
 
 import Environment
@@ -75,11 +76,31 @@ genTopInstr fun@(FnDef a type_ ident@(Ident name) args (Block t block)) = do
     printCode
     return ()
 
+removeDeadCode :: [Tuple] -> [Tuple]
+removeDeadCode code =
+    case (findIndex dropAfterRet code) of
+        (Nothing) -> code
+        (Just i) -> take i code
 printCode :: StateT EnvMid IO ()
 printCode = do
+    emit(EmptyOp, NIL, NIL, NIL)
     (a, b, c, d, e) <- get
-    if(M.size e == 0) then put (a, b, c+1, d, M.insert 0 ("entry", 0) e) else return ()
-    z <- genLabel "end"
+    if(M.size e == 0) then do
+        put (a, b, c+1, d, M.insert 0 ("entry", 0) e)
+        return ()
+    else do
+        case (M.lookup 0 e) of
+            (Just (_, 0)) -> return ()
+            otherwise -> put (a, b, c + 1, d, M.insert c ("entry", 0) e)
+        return ()
+    (a, b, c, d, e) <- get
+    same <- return $ map (\(nr, (_, code))-> (code, nr)) (M.toList e)
+    --same_code <- return $ groupLabels (\ x y -> ((fst x) == (fst y))) same
+    same_code_ <- return $ groupLabels same M.empty
+    same_code <- return $ map snd (M.toList same_code_)
+    correct <- return $ same_code-- map (map snd) same_code
+    mapM alterLabels correct
+    mapM eraseDupsLabels (map tail correct)
     (a, b, c, d, e) <- get
     lines_ <- return $ map (printTuple) d
     lin <-return $  lines_
@@ -88,18 +109,115 @@ printCode = do
     so <- return $ sortBy (\((_, pos1), _) ((_, pos2), _) -> compare pos1 pos2) labels_
     ok <- return $ insertLabels 0 so lin
     liftIO $ mapM print ok
-    liftIO $ putStrLn $ show e
-    starts <- return $ sort $ map (\(_, pos) -> pos) (M.elems e)
-    ends <- return $ sort $ returnJump 0 [] d
-    --liftIO $ putStrLn $ show starts
-    ext <- return $  tail $ (sort $ ends ++ (map (subtract 1) starts))
-    len <- numberOfLine
-    begs <- return $ filter (\(a) -> (a <= len)) starts
-    endings <- return $ filter (\(a) -> (a >= 0)) ext
-    begs_ <- return $(take (length endings) begs)
-    ends_ <- return $ (take (length begs_) endings)
-    liftIO  $ putStrLn $ show begs_
-    liftIO  $ putStrLn $ show ends_
+    starts <- return $ sortBy (compare `on` (snd)) $ map (\(k,(l, pos)) -> (k, pos)) (M.toList e)
+    (_,_,_,_, res) <- return $ genBlock (fst $ head starts, 0, d, tail starts, M.empty)
+    --liftIO $ putStrLn $ show res
+    ord <- return $ map fst $ map swap so
+    sorted <- return $ sortMap ord res []
+    acc <- genControlFlow sorted ord M.empty
+    wynik <- traverseBlocks [] acc res M.empty (Label "" (head ord))
+    return ()
+
+groupLabels :: [(Int, Int)] -> M.Map Int [Int] -> M.Map Int [Int]
+groupLabels [] old = old
+groupLabels ((c, nr):xs) old =
+    case (M.lookup c old) of
+        Nothing -> groupLabels xs (M.insert c [nr] old)
+        (Just x) ->  groupLabels xs (M.insert c (x++[nr]) old)
+
+eraseDupsLabels :: [Int] -> StateT EnvMid IO ()
+eraseDupsLabels ls = do
+    mapM eraseHelper ls
+    return ()
+
+eraseHelper :: Int -> StateT EnvMid IO ()
+eraseHelper nr = do
+    (a, b, c, d, e) <- get
+    put(a, b, c, d, M.delete nr e)
+    return ()
+alterLabels :: [Int] -> StateT EnvMid IO ()
+alterLabels same = do
+    if(length same == 1) then return ()
+    else do
+        leader <- return $ Label "" (head same)
+        changers <- return $ map (\x -> (Label "l" x)) (tail same)
+        (a, b, c, d, e) <- get
+        diff <- return $ map (changeLabel leader changers) d
+        put(a, b, c, diff, e)
+        return ()
+
+changeLabel ::  Argument -> [Argument] -> Tuple -> Tuple
+changeLabel  leader cands (IfOp a, b, c, y) = do
+    if(y `elem` cands) then (IfOp a, b, c, leader)
+    else (IfOp a, b, c, y)
+changeLabel leader cands (GotoOp, y, a, b) = do
+    if(y `elem` cands) then (GotoOp, leader, a, b)
+    else (GotoOp, y, a, b)
+changeLabel aleader cands a = a
+
+traverseBlocks :: [Int] -> M.Map Int [Argument] -> M.Map Int [Tuple] -> M.Map Int [Tuple] ->
+    Argument -> StateT EnvMid IO (M.Map Int [Tuple])
+traverseBlocks visited graph orginal old (Label _ node) = do
+    if(node `elem` visited) then return old
+    else do
+        me <- return $ fromJust $ M.lookup node orginal
+        ch <- return $ fromJust $ M.lookup node graph
+        children <-  mapM (traverseBlocks (node:visited) graph orginal (M.insert node me old)) ch
+        return $ foldr (M.union) (M.insert node me old) children
+
+sortMap :: [Int] -> M.Map Int [Tuple] -> [(Int, [Tuple])] ->  [(Int, [Tuple])]
+sortMap [] map_ list_ =  list_
+sortMap (x:xs) map_ list_ =
+    if (isJust $ M.lookup x map_) then sortMap xs map_ (list_ ++ ([(x,fromJust $ M.lookup x map_)]))
+    else sortMap xs map_ list_
+
+genControlFlow :: [(Int, [Tuple])] -> [Int] -> M.Map Int [Argument] -> StateT EnvMid IO (M.Map Int [Argument])
+genControlFlow [] _ x = return x
+genControlFlow  ((nr, []):xs) (y:ys) graph = do
+    if(length xs == 0) then return graph
+    else genControlFlow xs ys (M.insert nr [Label "" (head ys)] graph)
+genControlFlow ((nr, code):xs) (y:ys) graph = do
+    instr <- return $ last code
+    case (instr) of
+        (IfOp a, _, _, jmp) -> do
+            if(length xs == 0) then
+                genControlFlow xs  ys (M.insert nr [jmp] graph)
+            else
+                genControlFlow xs ys(M.insert nr ([Label "" (head ys)]++ [jmp]) graph)
+        (RetOp, _, _, _) -> do
+            updated <- return $ M.insert nr [] graph
+            genControlFlow xs  ys updated
+        (GotoOp, jmp, _, _) -> do
+            updated <- return $ M.insert nr [jmp] graph
+            genControlFlow xs (ys) updated
+        (otherwise) -> do
+            if(length xs == 0) then
+                genControlFlow xs ys (M.insert nr [] graph)
+            else
+                genControlFlow xs ys (M.insert nr ([Label "" (head ys)]) graph)
+
+
+
+dropAfterRet :: Tuple -> Bool
+dropAfterRet (RetOp, _, _, _) = True
+dropAfterRet _ = False
+
+--index code labels old_map new labels new_map new index
+genBlock :: (Int, Int, [Tuple], [(Int, Int)], M.Map Int [Tuple]) ->
+    (Int, Int, [Tuple], [(Int, Int)], M.Map Int [Tuple])
+genBlock (curr, index, [], [], blocks) = (curr, index, [], [], blocks)
+genBlock (curr, index, code, [], blocks) = do
+    case (M.lookup curr blocks) of
+        Nothing -> (curr, index , [], [], M.insert curr code blocks)
+        (Just x) -> (curr, index, [],[], M.insert curr (x++code) blocks)
+genBlock (curr, index, [], labels, blocks) = (curr, index, [], labels, blocks)
+genBlock (curr, index, (c:cx), ((nr, l):lx), blocks) = do
+    if(index == l) then genBlock (nr, index, (c:cx), lx, blocks)
+    else
+        case (M.lookup curr blocks) of
+            Nothing -> genBlock(curr, index + 1, cx, ((nr, l):lx), M.insert curr [c] blocks)
+            (Just x) -> genBlock(curr, index + 1, cx, ((nr, l):lx), M.insert curr (x++[c]) blocks)
+
 
 
 genStmt ::Stmt (Maybe(Int, Int)) -> StateT EnvMid IO ()
@@ -149,7 +267,7 @@ genStmt  (Cond info cond ifBlock) = do
             lTrue <- return $ Label  "l" lTrue_
             lEnd_ <- reserveLabel "l"
             lEnd <- return $ Label  "l" lEnd_
-            genCond cond lTrue lEnd lEnd
+            genCond cond lTrue lEnd lTrue
             updateLabel lTrue_
             genStmt (BStmt Nothing $ Block Nothing [ifBlock])
             updateLabel lEnd_
@@ -168,26 +286,33 @@ genStmt (CondElse info cond ifBlock elseBlock) = do
             lFalse <- return $ Label  "l" lFalse_
             lEnd_ <- reserveLabel "l"
             lEnd <- return $ Label  "l" lEnd_
-            genCond cond lTrue lFalse lFalse
+            genCond cond lTrue lFalse lTrue
             updateLabel lTrue_
             genStmt (BStmt Nothing $ Block Nothing [ifBlock])
+            emit(GotoOp, lEnd, NIL, NIL)
             updateLabel lFalse_
             genStmt (BStmt Nothing $ Block Nothing [elseBlock])
             updateLabel lEnd_
 genStmt (While a expr stmt) = do
-    l1_ <- reserveLabel "l"
-    l1 <- return $ Label  "l" l1_
-    l2_ <- reserveLabel "l"
-    l2 <- return $ Label  "l" l2_
-    lEnd_ <- reserveLabel "l"
-    lEnd <- return $ Label  "l" lEnd_
-    emit(GotoOp, l2, NIL, NIL)
-    updateLabel l1_
-    genStmt (BStmt Nothing $ Block Nothing [stmt])
-    updateLabel l2_
-    genCond expr l1 lEnd lEnd
-    updateLabel lEnd_
-
+    case (expr) of
+        (ELitTrue a) -> do
+            lTrue_ <- genLabel "l"
+            genStmt (BStmt Nothing $ Block Nothing [stmt])
+            emit(GotoOp, Label "l" lTrue_, NIL, NIL)
+        (ELitFalse a) -> return ()
+        otherwise -> do
+            l1_ <- reserveLabel "l"
+            l1 <- return $ Label  "l" l1_
+            l2_ <- reserveLabel "l"
+            l2 <- return $ Label  "l" l2_
+            lEnd_ <- reserveLabel "l"
+            lEnd <- return $ Label  "l" lEnd_
+            emit(GotoOp, l2, NIL, NIL)
+            updateLabel l1_
+            genStmt (BStmt Nothing $ Block Nothing [stmt])
+            updateLabel l2_
+            genCond expr l1 lEnd lEnd
+            updateLabel lEnd_
 
 genCond :: Expr (Maybe (Int, Int)) -> Argument -> Argument -> Argument -> StateT EnvMid IO ()
 genCond (ELitTrue a) lTrue lFalse lNext =
@@ -208,7 +333,6 @@ genCond (EOr _ e1 e2) lTrue lFalse lNext = do
     genCond e2 lTrue lFalse lTrue
 
 genCond (Not _ e) lTrue lFalse lNext = genCond e lFalse lTrue lNext
-
 genCond (ERel a expr1 relop_ expr2 ) lThen lElse lNext = do
     e1 <- genExpr expr1
     e2 <- genExpr expr2
@@ -226,6 +350,7 @@ genCond (ERel a expr1 relop_ expr2 ) lThen lElse lNext = do
             jmp <- return  lThen
             emitCond relop e1 e2 jmp
             emit(GotoOp, lElse, NIL, NIL)
+genCond e lThen lElse lNext = genCond (ERel Nothing e (EQU Nothing) (ELitTrue Nothing)) lThen lElse lNext
 
 emitCond :: RelOp a-> Argument-> Argument-> Argument -> StateT EnvMid IO ()
 emitCond relop e1 e2 jmp = do
@@ -306,14 +431,14 @@ genExpr exp = case exp of
         ERel a expr1 relop expr2 -> do
             e1 <- genExpr expr1
             e2 <- genExpr expr2
-            lTrue <- reserveLabel "lTrue"
+            lTrue <- reserveLabel "l"
             case (relop) of
-                LTH x -> emit(IfOp LTHm, e1, e2, Label "lTrue" lTrue)
-                LE a -> emit(IfOp LEm, e1, e2,  Label "lTrue" lTrue)
-                GTH a -> emit(IfOp GTHm, e1, e2,  Label "lTrue" lTrue)
-                GE a -> emit(IfOp GEm, e1, e2, Label "lTrue" lTrue)
-                EQU a -> emit(IfOp EQUm, e1, e2,  Label "lTrue" lTrue)
-                NE a -> emit(IfOp NEm, e1, e2,  Label "lTrue" lTrue)
+                LTH x -> emit(IfOp LTHm, e1, e2, Label "l" lTrue)
+                LE a -> emit(IfOp LEm, e1, e2,  Label "l" lTrue)
+                GTH a -> emit(IfOp GTHm, e1, e2,  Label "l" lTrue)
+                GE a -> emit(IfOp GEm, e1, e2, Label "l" lTrue)
+                EQU a -> emit(IfOp EQUm, e1, e2,  Label "l" lTrue)
+                NE a -> emit(IfOp NEm, e1, e2,  Label "l" lTrue)
             t <- freshTemp
             emit(AssOp, ValBool False, t, NIL)
             updateLabel lTrue
@@ -322,28 +447,29 @@ genExpr exp = case exp of
 
         EAnd a expr1 expr2 -> do
             e1 <- genExpr expr1
-            lFalse <- reserveLabel "lFalse"
-            lEnd <- reserveLabel "lEnd"
-            emit(IfOp NEm, e1, ValBool True, Label "lFalse" lFalse)
+            lFalse <- reserveLabel "l"
+            lEnd <- reserveLabel "l"
+            emit(IfOp NEm, e1, ValBool True, Label "l" lFalse)
             e2 <- genExpr expr2
-            emit(IfOp NEm, e2, ValBool True, Label "lFalse" lFalse)
+            emit(IfOp NEm, e2, ValBool True, Label "l" lFalse)
             t <- freshTemp
             emit(AssOp, ValBool True, t, NIL)
-            emit(GotoOp, Label "lEnd" lEnd, NIL, NIL)
+            emit(GotoOp, Label "l" lEnd, NIL, NIL)
             updateLabel lFalse
             emit(AssOp, ValBool False, t, NIL)
             updateLabel lEnd
+
             return t
         EOr a expr1 expr2 -> do
             e1 <- genExpr expr1
-            lTrue <- reserveLabel "lTrue"
-            lEnd <- reserveLabel "lEnd"
-            emit(IfOp NEm, e1, ValBool True, Label "lTrue" lTrue)
+            lTrue <- reserveLabel "l"
+            lEnd <- reserveLabel "l"
+            emit(IfOp NEm, e1, ValBool True, Label "l" lTrue)
             e2 <- genExpr expr2
-            emit(IfOp NEm, e2, ValBool True, Label "lTrue" lTrue)
+            emit(IfOp NEm, e2, ValBool True, Label "l"  lTrue)
             t <- freshTemp
             emit(AssOp, ValBool False, t, NIL)
-            emit(GotoOp, Label "lEnd" lEnd, NIL, NIL)
+            emit(GotoOp, Label "l" lEnd, NIL, NIL)
             updateLabel  lTrue
             emit(AssOp, ValBool True, t, NIL)
             updateLabel lEnd
