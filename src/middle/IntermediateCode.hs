@@ -95,58 +95,80 @@ genStmt (Decr a val) = do
     emit(Store, t, Var (snd $ stringLValue val), NIL)
 genStmt  (Empty a) = return ()
 genStmt  (Cond info cond ifBlock) = do
-    lEnd_ <- reserveLabel "l"
-    lEnd <- return $ Label  "l" lEnd_
     lTrue_ <- reserveLabel "l"
     lTrue <- return $ Label  "l" lTrue_
+    lEnd_ <- reserveLabel "l"
+    lEnd <- return $ Label  "l" lEnd_
     genCond cond lTrue lEnd lEnd
     updateLabel lTrue_
     genStmt (BStmt Nothing $ Block Nothing [ifBlock])
     updateLabel lEnd_
 genStmt (CondElse info cond ifBlock elseBlock) = do
-    lFalse_ <- reserveLabel "l"
-    lFalse <- return $ Label  "l" lFalse_
     lTrue_ <- reserveLabel "l"
     lTrue <- return $ Label  "l" lTrue_
+    lFalse_ <- reserveLabel "l"
+    lFalse <- return $ Label  "l" lFalse_
     lEnd_ <- reserveLabel "l"
     lEnd <- return $ Label  "l" lEnd_
-    genCond cond lTrue lFalse lEnd
+    genCond cond lTrue lFalse lFalse
     updateLabel lTrue_
     genStmt (BStmt Nothing $ Block Nothing [ifBlock])
     updateLabel lFalse_
     genStmt (BStmt Nothing $ Block Nothing [elseBlock])
     updateLabel lEnd_
 
-genCond :: Expr (Maybe (Int, Int)) -> Argument -> Argument -> Argument -> StateT EnvMid IO (Int)
+genCond :: Expr (Maybe (Int, Int)) -> Argument -> Argument -> Argument -> StateT EnvMid IO ()
 genCond (EAnd _ e1 e2) lTrue lFalse lNext = do
     lMid_ <- (reserveLabel "l")
     lMid <- return $ Label  "l" lMid_
-    n <- genCond e1 lMid lFalse lMid
+    genCond e1 lMid lFalse lMid
     updateLabel lMid_
-    genCond e2 lTrue lFalse (Label "l" n)
-    return lMid_
+    genCond e2 lTrue lFalse lNext
 genCond (EOr _ e1 e2) lTrue lFalse lNext = do
     lMid_ <- (reserveLabel "l")
     lMid <- return $ Label  "l" lMid_
-    n <- genCond e1 lTrue lMid lMid
+    genCond e1 lTrue lMid lMid
     updateLabel lMid_
-    genCond e2 lTrue lFalse (Label "l" n)
-    return lMid_
+    genCond e2 lTrue lFalse lTrue
 
 genCond (Not _ e) lTrue lFalse lNext = genCond e lFalse lTrue lNext
 
-genCond (ERel a expr1 relop expr2 ) lThen lElse lNext= do
+genCond (ERel a expr1 relop_ expr2 ) lThen lElse lNext = do
     e1 <- genExpr expr1
     e2 <- genExpr expr2
+    if(lNext == lThen) then do
+        relop <- return $ compl relop_
+        jmp <- return  lElse
+        emitCond relop e1 e2 jmp
+    else do
+        if (lNext == lElse) then do
+            relop <- return relop_
+            jmp <- return  lThen
+            emitCond relop e1 e2 jmp
+        else do
+            relop <- return  relop_
+            jmp <- return  lThen
+            emitCond relop e1 e2 jmp
+            emit(GotoOp, lElse, NIL, NIL)
+
+emitCond :: RelOp a-> Argument-> Argument-> Argument -> StateT EnvMid IO ()
+emitCond relop e1 e2 jmp = do
     case (relop) of
-        LTH x -> emit(IfOp LTHm, e1, e2, lThen)
-        LE a -> emit(IfOp LEm, e1, e2,  lThen)
-        GTH a -> emit(IfOp GTHm, e1, e2,  lThen)
-        GE a -> emit(IfOp GEm, e1, e2, lThen)
-        EQU a -> emit(IfOp EQUm, e1, e2,  lThen)
-        NE a -> emit(IfOp NEm, e1, e2,  lThen)
-    emit(GotoOp, lElse, NIL, NIL)
-    return 1
+        LTH x -> emit(IfOp LTHm, e1, e2, jmp)
+        LE a -> emit(IfOp LEm, e1, e2,  jmp)
+        GTH a -> emit(IfOp GTHm, e1, e2,  jmp)
+        GE a -> emit(IfOp GEm, e1, e2, jmp)
+        EQU a -> emit(IfOp EQUm, e1, e2, jmp)
+        NE a -> emit(IfOp NEm, e1, e2, jmp)
+    return ()
+
+compl :: RelOp x -> RelOp x
+compl (LTH a) = GE a
+compl (LE a) = GTH a
+compl (GTH a) =LE a
+compl (GE a) = LTH a
+compl (EQU a) =NE a
+compl (NE a) = EQU a
 
 
 

@@ -179,6 +179,7 @@ instance Functor MulOp where
         Times a -> Times (f a)
         Div a -> Div (f a)
         Mod a -> Mod (f a)
+        
 data RelOp a = LTH a | LE a | GTH a | GE a | EQU a | NE a
   deriving (Eq, Ord, Show, Read)
 
