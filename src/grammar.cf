@@ -16,8 +16,9 @@ separator  Arg "," ;
 
 ValVar.         LValue ::= Ident ;
 ValArr.         LValue ::= Ident "[" Expr"]" ;
-ValField.       LValue ::= Ident "."  Ident;
+ValField.       LValue2 ::= LValue "."  LValue;
 
+coercions LValue 3;
 -- statements ----------------------------------------------
 
 Block.     Block ::= "{" [Stmt] "}" ;
@@ -94,6 +95,8 @@ ClFun.       ClassStmt ::= Type Ident "(" [Arg] ")" Block ;
 
 EVar.      Expr6 ::= LValue ;
 
+ENew.      Expr6 ::= "new" Type  ;
+
 ENewArr.   Expr6 ::= "new" Type "[" Expr "]" ;
 
 ENullCast. Expr6 ::= "(" Type ")" "null" ;
@@ -107,6 +110,8 @@ ELitFalse. Expr6 ::= "false" ;
 EApp.      Expr7 ::= Ident "(" [Expr] ")" ;
 
 EClApp.    Expr6 ::= Ident "." Ident "(" [Expr] ")" ;
+
+EArrLen.    Expr6 ::= Ident "." "length";
 
 EString.   Expr6 ::= String ;
 
@@ -124,7 +129,7 @@ EAnd.      Expr1 ::= Expr2 "&&" Expr1 ;
 
 EOr.       Expr ::= Expr1 "||" Expr ;
 
-coercions  Expr 7 ;
+coercions  Expr 8 ;
 
 separator  Expr "," ;
 

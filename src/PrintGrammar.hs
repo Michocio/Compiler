@@ -107,7 +107,7 @@ instance Print (LValue a) where
   prt i e = case e of
     ValVar _ id -> prPrec i 0 (concatD [prt 0 id])
     ValArr _ id expr -> prPrec i 0 (concatD [prt 0 id, doc (showString "["), prt 0 expr, doc (showString "]")])
-    ValField _ id1 id2 -> prPrec i 0 (concatD [prt 0 id1, doc (showString "."), prt 0 id2])
+    ValField _ lvalue1 lvalue2 -> prPrec i 2 (concatD [prt 0 lvalue1, doc (showString "."), prt 0 lvalue2])
 
 instance Print (Block a) where
   prt i e = case e of
@@ -163,6 +163,7 @@ instance Print (ClassStmt a) where
 instance Print (Expr a) where
   prt i e = case e of
     EVar _ lvalue -> prPrec i 6 (concatD [prt 0 lvalue])
+    ENew _ type_ -> prPrec i 6 (concatD [doc (showString "new"), prt 0 type_])
     ENewArr _ type_ expr -> prPrec i 6 (concatD [doc (showString "new"), prt 0 type_, doc (showString "["), prt 0 expr, doc (showString "]")])
     ENullCast _ type_ -> prPrec i 6 (concatD [doc (showString "("), prt 0 type_, doc (showString ")"), doc (showString "null")])
     ELitInt _ n -> prPrec i 6 (concatD [prt 0 n])
@@ -170,6 +171,7 @@ instance Print (Expr a) where
     ELitFalse _ -> prPrec i 6 (concatD [doc (showString "false")])
     EApp _ id exprs -> prPrec i 7 (concatD [prt 0 id, doc (showString "("), prt 0 exprs, doc (showString ")")])
     EClApp _ id1 id2 exprs -> prPrec i 6 (concatD [prt 0 id1, doc (showString "."), prt 0 id2, doc (showString "("), prt 0 exprs, doc (showString ")")])
+    EArrLen _ id -> prPrec i 6 (concatD [prt 0 id, doc (showString "."), doc (showString "length")])
     EString _ str -> prPrec i 6 (concatD [prt 0 str])
     Neg _ expr -> prPrec i 5 (concatD [doc (showString "-"), prt 6 expr])
     Not _ expr -> prPrec i 5 (concatD [doc (showString "!"), prt 6 expr])

@@ -26,7 +26,7 @@ transLValue :: Show a => LValue a -> Result
 transLValue x = case x of
   ValVar _ ident -> failure x
   ValArr _ ident expr -> failure x
-  ValField _ ident1 ident2 -> failure x
+  ValField _ lvalue1 lvalue2 -> failure x
 transBlock :: Show a => Block a -> Result
 transBlock x = case x of
   Block _ stmts -> failure x
@@ -71,6 +71,7 @@ transClassStmt x = case x of
 transExpr :: Show a => Expr a -> Result
 transExpr x = case x of
   EVar _ lvalue -> failure x
+  ENew _ type_ -> failure x
   ENewArr _ type_ expr -> failure x
   ENullCast _ type_ -> failure x
   ELitInt _ integer -> failure x
@@ -78,6 +79,7 @@ transExpr x = case x of
   ELitFalse _ -> failure x
   EApp _ ident exprs -> failure x
   EClApp _ ident1 ident2 exprs -> failure x
+  EArrLen _ ident -> failure x
   EString _ string -> failure x
   Neg _ expr -> failure x
   Not _ expr -> failure x

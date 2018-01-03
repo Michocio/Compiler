@@ -30,7 +30,15 @@ type FunDef = (TypeD, [(TypeD, Ident)], BlockD)
 
 printIntDef = ((Void Nothing), [((Int Nothing), Ident "x")], Block Nothing []);
 printStringDef = ((Void Nothing), [((Str Nothing, Ident "x"))], Block Nothing []);
+errorDef = ((Void Nothing), [], Block Nothing []);
+readIntDef = ((Int Nothing), [], Block Nothing [Ret Nothing (ELitInt Nothing 0)]);
+readStringDef = ((Str Nothing), [], Block Nothing [Ret Nothing ( EString Nothing "")]);
 
+predefinied = [(Ident "printInt", printIntDef),
+                (Ident "printString", printStringDef),
+                (Ident "error", errorDef),
+                (Ident "readInt", readIntDef),
+                (Ident "readString", readStringDef)]
 
 type ClassField =  M.Map Ident TypeD
 type ClassMethod =  M.Map Ident FunDef
@@ -49,7 +57,7 @@ type TopDefD = TopDef (Maybe (Int, Int))
 type TypeD = Type (Maybe (Int, Int))
 type BlockD = Block (Maybe (Int, Int))
 
-initialEnv = (M.empty, M.empty, M.empty, M.empty)
+initialEnv = (M.empty, M.empty, M.fromList predefinied, M.empty)
 
 getTypeOfFun :: Ident ->  StateT Env IO (Maybe TypeD)
 getTypeOfFun name = do

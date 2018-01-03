@@ -18,7 +18,7 @@ transProgram x = case x of
 transTopDef :: Show a => TopDef a -> Result
 transTopDef x = case x of
   FnDef _ type_ ident args block -> failure x
-  ClassDef _ classheader -> failure x
+  ClassDef _ classheader classblock -> failure x
 transArg :: Show a => Arg a -> Result
 transArg x = case x of
   Arg _ type_ ident -> failure x
@@ -26,7 +26,7 @@ transLValue :: Show a => LValue a -> Result
 transLValue x = case x of
   ValVar _ ident -> failure x
   ValArr _ ident expr -> failure x
-  ValField _ ident1 ident2 -> failure x
+  ValField _ lvalue1 lvalue2 -> failure x
 transBlock :: Show a => Block a -> Result
 transBlock x = case x of
   Block _ stmts -> failure x
@@ -59,8 +59,8 @@ transType x = case x of
   Array _ type_ -> failure x
 transClassHeader :: Show a => ClassHeader a -> Result
 transClassHeader x = case x of
-  ClassDec _ ident classblock -> failure x
-  ClassDecExt _ ident1 ident2 classblock -> failure x
+  ClassDec _ ident -> failure x
+  ClassDecExt _ ident1 ident2 -> failure x
 transClassBlock :: Show a => ClassBlock a -> Result
 transClassBlock x = case x of
   ClBlock _ classstmts -> failure x
@@ -71,6 +71,7 @@ transClassStmt x = case x of
 transExpr :: Show a => Expr a -> Result
 transExpr x = case x of
   EVar _ lvalue -> failure x
+  ENew _ type_ -> failure x
   ENewArr _ type_ expr -> failure x
   ENullCast _ type_ -> failure x
   ELitInt _ integer -> failure x

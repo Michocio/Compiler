@@ -46,16 +46,17 @@ import ErrM
   'for' { PT _ (TS _ 31) }
   'if' { PT _ (TS _ 32) }
   'int' { PT _ (TS _ 33) }
-  'new' { PT _ (TS _ 34) }
-  'null' { PT _ (TS _ 35) }
-  'return' { PT _ (TS _ 36) }
-  'string' { PT _ (TS _ 37) }
-  'true' { PT _ (TS _ 38) }
-  'void' { PT _ (TS _ 39) }
-  'while' { PT _ (TS _ 40) }
-  '{' { PT _ (TS _ 41) }
-  '||' { PT _ (TS _ 42) }
-  '}' { PT _ (TS _ 43) }
+  'length' { PT _ (TS _ 34) }
+  'new' { PT _ (TS _ 35) }
+  'null' { PT _ (TS _ 36) }
+  'return' { PT _ (TS _ 37) }
+  'string' { PT _ (TS _ 38) }
+  'true' { PT _ (TS _ 39) }
+  'void' { PT _ (TS _ 40) }
+  'while' { PT _ (TS _ 41) }
+  '{' { PT _ (TS _ 42) }
+  '||' { PT _ (TS _ 43) }
+  '}' { PT _ (TS _ 44) }
 
   L_ident {PT _ (TV _)}
   L_integ {PT _ (TI _)}
@@ -140,8 +141,32 @@ LValue :: {
 | Ident '[' Expr ']' {
   (fst $1, AbsGrammar.ValArr (fst $1)(snd $1)(snd $3)) 
 }
-| Ident '.' Ident {
+| LValue1 {
+  (fst $1, snd $1)
+}
+
+LValue2 :: {
+  (Maybe (Int, Int), LValue (Maybe (Int, Int)))
+}
+: LValue '.' LValue {
   (fst $1, AbsGrammar.ValField (fst $1)(snd $1)(snd $3)) 
+}
+| LValue3 {
+  (fst $1, snd $1)
+}
+
+LValue1 :: {
+  (Maybe (Int, Int), LValue (Maybe (Int, Int)))
+}
+: LValue2 {
+  (fst $1, snd $1)
+}
+
+LValue3 :: {
+  (Maybe (Int, Int), LValue (Maybe (Int, Int)))
+}
+: '(' LValue ')' {
+  (Just (tokenLineCol $1), snd $2)
 }
 
 Block :: {
@@ -289,6 +314,9 @@ Expr6 :: {
 : LValue {
   (fst $1, AbsGrammar.EVar (fst $1)(snd $1)) 
 }
+| 'new' Type {
+  (Just (tokenLineCol $1), AbsGrammar.ENew (Just (tokenLineCol $1)) (snd $2)) 
+}
 | 'new' Type '[' Expr ']' {
   (Just (tokenLineCol $1), AbsGrammar.ENewArr (Just (tokenLineCol $1)) (snd $2)(snd $4)) 
 }
@@ -307,6 +335,9 @@ Expr6 :: {
 | Ident '.' Ident '(' ListExpr ')' {
   (fst $1, AbsGrammar.EClApp (fst $1)(snd $1)(snd $3)(snd $5)) 
 }
+| Ident '.' 'length' {
+  (fst $1, AbsGrammar.EArrLen (fst $1)(snd $1)) 
+}
 | String {
   (fst $1, AbsGrammar.EString (fst $1)(snd $1)) 
 }
@@ -320,8 +351,8 @@ Expr7 :: {
 : Ident '(' ListExpr ')' {
   (fst $1, AbsGrammar.EApp (fst $1)(snd $1)(snd $3)) 
 }
-| '(' Expr ')' {
-  (Just (tokenLineCol $1), snd $2)
+| Expr8 {
+  (fst $1, snd $1)
 }
 
 Expr5 :: {
@@ -385,6 +416,13 @@ Expr :: {
 }
 | Expr1 {
   (fst $1, snd $1)
+}
+
+Expr8 :: {
+  (Maybe (Int, Int), Expr (Maybe (Int, Int)))
+}
+: '(' Expr ')' {
+  (Just (tokenLineCol $1), snd $2)
 }
 
 ListExpr :: {

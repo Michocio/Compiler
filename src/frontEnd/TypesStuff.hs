@@ -49,13 +49,28 @@ getType x = case x of
     Str _  -> Str Nothing
     Bool _ -> Bool Nothing
     Void _ -> Void Nothing
-    Array _ type_ -> Array Nothing type_
+    Array _ type_ -> Array Nothing (getType type_)
 
-identLValue :: LValue a -> Ident
-identLValue (ValVar a name) = name
-identLValue (ValArr a name e) = name
-identLValue (ValField a obj field) = obj
+isArray :: Type (Maybe (Int, Int)) -> Bool
+isArray (Array _ type_) = True
+isArray _ = False
 
+arrayType ::  Type (Maybe (Int, Int)) -> Type (Maybe (Int, Int))
+arrayType (Array _ type_) = type_
+
+identLValue :: LValue a -> (Bool, Ident)
+identLValue (ValVar a name) = (False, name)
+identLValue (ValArr a name e) = (True, name)
+identLValue (ValField a obj field) = (False, snd $ identLValue obj)
+
+
+stringLValue :: LValue a -> (Bool, String)
+stringLValue (ValVar a (Ident name)) = (False, name)
+stringLValue (ValArr a (Ident name) e) = (True, name)
+stringLValue (ValField a obj field) = (False, "class")
+
+getIndex :: LValue a -> Expr a
+getIndex (ValArr a name e) = e
 
 equalTypes :: Type Debug -> Type Debug -> Bool
 equalTypes t1 t2 = (getType t1) == (getType t2)

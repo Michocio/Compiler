@@ -34,8 +34,8 @@ The set of reserved words is the set of terminals appearing in the grammar. Thos
 The reserved words used in grammar are the following:
   | ``boolean`` | ``class`` | ``else`` | ``extends``
   | ``false`` | ``for`` | ``if`` | ``int``
-  | ``new`` | ``null`` | ``return`` | ``string``
-  | ``true`` | ``void`` | ``while`` | 
+  | ``length`` | ``new`` | ``null`` | ``return``
+  | ``string`` | ``true`` | ``void`` | ``while``
 
 The symbols used in grammar are the following:
   | ( | ) | , | [
@@ -66,7 +66,11 @@ All other symbols are terminals.
   |  |  **|**  | //Arg// ``,`` //[Arg]// 
   | //LValue// | -> | //Ident// 
   |  |  **|**  | //Ident// ``[`` //Expr// ``]`` 
-  |  |  **|**  | //Ident// ``.`` //Ident// 
+  |  |  **|**  | //LValue1// 
+  | //LValue2// | -> | //LValue// ``.`` //LValue// 
+  |  |  **|**  | //LValue3// 
+  | //LValue1// | -> | //LValue2// 
+  | //LValue3// | -> | ``(`` //LValue// ``)`` 
   | //Block// | -> | ``{`` //[Stmt]// ``}`` 
   | //[Stmt]// | -> | **eps**
   |  |  **|**  | //Stmt// //[Stmt]// 
@@ -101,16 +105,18 @@ All other symbols are terminals.
   | //ClassStmt// | -> | //Type// //[Item]// ``;`` 
   |  |  **|**  | //Type// //Ident// ``(`` //[Arg]// ``)`` //Block// 
   | //Expr6// | -> | //LValue// 
+  |  |  **|**  | ``new`` //Type// 
   |  |  **|**  | ``new`` //Type// ``[`` //Expr// ``]`` 
   |  |  **|**  | ``(`` //Type// ``)`` ``null`` 
   |  |  **|**  | //Integer// 
   |  |  **|**  | ``true`` 
   |  |  **|**  | ``false`` 
   |  |  **|**  | //Ident// ``.`` //Ident// ``(`` //[Expr]// ``)`` 
+  |  |  **|**  | //Ident// ``.`` ``length`` 
   |  |  **|**  | //String// 
   |  |  **|**  | //Expr7// 
   | //Expr7// | -> | //Ident// ``(`` //[Expr]// ``)`` 
-  |  |  **|**  | ``(`` //Expr// ``)`` 
+  |  |  **|**  | //Expr8// 
   | //Expr5// | -> | ``-`` //Expr6// 
   |  |  **|**  | ``!`` //Expr6// 
   |  |  **|**  | //Expr6// 
@@ -124,6 +130,7 @@ All other symbols are terminals.
   |  |  **|**  | //Expr2// 
   | //Expr// | -> | //Expr1// ``||`` //Expr// 
   |  |  **|**  | //Expr1// 
+  | //Expr8// | -> | ``(`` //Expr// ``)`` 
   | //[Expr]// | -> | **eps**
   |  |  **|**  | //Expr// 
   |  |  **|**  | //Expr// ``,`` //[Expr]// 

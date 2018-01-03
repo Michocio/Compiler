@@ -30,11 +30,23 @@ exprType :: Expr (Maybe (Int, Int)) -> StateT Env IO (TypeD)
 exprType exp = case exp of
     EVar a lvalue -> do
         vars <- getVars
-        name <- return (identLValue lvalue)
+        (arr, name) <- return (identLValue lvalue)
         case (M.lookup name vars) of
-            (Just x) -> return x
+            (Just x) -> do
+                if(arr && (isArray x == False)) then notArray (getTypeInfo x) name
+                else do
+                    if(arr) then return $ arrayType x
+                    else return $ getType x
             otherwise -> varUndeclared a name
-    --ENewArr a type_ expr -> ENewArr (f a) (fmap f type_) (fmap f expr)
+    ENewArr a type_ expr -> do
+        return $ Array a type_
+    EArrLen a name -> do
+        vars <- getVars
+        case (M.lookup name vars) of
+            (Just x) -> do
+                if(isArray x == False) then notArray (getTypeInfo x) name
+                else return (Int Nothing)
+            otherwise -> varUndeclared a name
     --ENullCast a type_ -> ENullCast (f a) (fmap f type_)
     ELitInt a integer -> return (Int a)
     ELitTrue a -> return (Bool a)
@@ -53,7 +65,13 @@ exprType exp = case exp of
         exp2 <- ifInt expr2
         if (exp1 && exp2) then return (Int a) else operatorErr True (Int Nothing) a
         return (Int a)
-    EAdd a expr1 addop expr2 -> exprType (EMul a expr1 (Times a) expr2)
+    EAdd a expr1 addop expr2 -> do
+        exp1 <- ifInt expr1
+        exp2 <- ifInt expr2
+        if (exp1 && exp2) then return (Int a) else do
+            exp1_ <- ifStr expr1
+            exp2_ <- ifStr expr2
+            if (exp1_ && exp2_) then return (Str a) else operatorArbErr a
     ERel a expr1 (EQU t) expr2 -> do
         exp1 <- exprType expr1
         exp2 <- exprType expr2
@@ -76,7 +94,7 @@ exprType exp = case exp of
 
 checkFunCall :: Expr (Maybe (Int, Int)) -> StateT Env IO (TypeD)
 checkFunCall (EApp info ident@(Ident name) exprs) = do
-    (_, _,funs, _) <- get
+    funs <- getFuns
     case (M.lookup ident funs) of
         (Just (tFun, args, _)) -> do
             (types, _) <- return $ unzip args
@@ -94,6 +112,11 @@ ifInt :: Expr (Maybe (Int, Int)) -> StateT Env IO (Bool)
 ifInt exp = do
     expT <- exprType exp
     return (getType expT == (Int Nothing))
+
+ifStr :: Expr (Maybe (Int, Int)) -> StateT Env IO (Bool)
+ifStr exp = do
+    expT <- exprType exp
+    return (getType expT == (Str Nothing))
 
 ifBool :: Expr (Maybe (Int, Int)) -> StateT Env IO (Bool)
 ifBool exp = do

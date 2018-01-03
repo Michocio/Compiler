@@ -33,8 +33,6 @@ functionChecker = do
     names <- return $ M.keys funs
     blocks <- return [ x | (_, _, x) <- M.elems funs]
     functions <- return $ zip names blocks
-    liftIO $ putStrLn "RAZ"
-    liftIO $ putStrLn $ show functions
     execFuns functions
 
 execFuns :: [(Ident, BlockD)] -> StateT Env IO ()
@@ -43,12 +41,10 @@ execFuns ((name, b@(Block info block)):end) = do
     (vars, d, funs, c) <- get
     (Just (t, args, _)) <- return $ M.lookup name funs
     extendedBlock <- return $ addArguments args block
-    wasRet <-  doBlock name False (Block info extendedBlock)
+    wasRet <-  doBlock True initialEnv name False (Block info extendedBlock)
     put(vars, d, funs, c)
     if(wasRet == True || (getType t) == (Void Nothing)) then execFuns end
-        else do
-            liftIO $ putStrLn $ (show info) ++ ": Non void function " ++ (show name) ++ " may not return any value."
-            liftIO exitFailure
+    else noRetErr info name
 
 addArguments :: [(TypeD, Ident)] -> [Stmt (Maybe (Int, Int))] -> [Stmt (Maybe (Int, Int))]
 addArguments [] x = x
@@ -59,8 +55,7 @@ newFunction :: TopDefD -> StateT Env IO ()
 newFunction (FnDef info ret name@(Ident funName) args block) = do
     exists <- checkName False name
     case exists of
-        (Just i) -> liftIO $ putStrLn $ (show $ fromJust info) ++ ": Duplicated name of function " ++ funName ++
-            ", firstly declared at: " ++ (show $ getTypeInfo i)
+        (Just i) -> funDuplErr info funName i
         otherwise -> do
                 arguments <- (checkParams args)
                 addFun name ret arguments block
@@ -81,8 +76,7 @@ checkParams args = do
         (Just duplicate@(Ident var)) -> do
             dups <- return $ take 1 $ reverse $ filter ((\(Arg a t name)-> (name == duplicate))) args
             positions <- return $ head (map (\(Arg a t name) -> a) dups)
-            liftIO $ putStrLn $ (show $ fromJust positions) ++ ": Duplicated name of argument " ++ (var)
-            liftIO $ exitFailure
+            funArgDupl positions var
             return []
 
 findDupArgs :: [Ident] -> Maybe Ident

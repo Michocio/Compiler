@@ -14,7 +14,6 @@ import PrintGrammar
 import AbsGrammar
 
 
-import FrontEnd
 
 
 import ErrM
@@ -28,10 +27,10 @@ type Verbosity = Int
 putStrV :: Verbosity -> String -> IO ()
 putStrV v s = when (v > 1) $ putStrLn s
 
-runFile :: Verbosity -> ParseFun (Program (Maybe (Int, Int))) -> FilePath -> IO ()
+runFile :: (Print a, Show a) => Verbosity -> ParseFun a -> FilePath -> IO ()
 runFile v p f = putStrLn f >> readFile f >>= run v p
 
-run :: Verbosity -> ParseFun (Program (Maybe (Int, Int))) -> String -> IO ()
+run :: (Print a, Show a) => Verbosity -> ParseFun a -> String -> IO ()
 run v p s = let ts = myLLexer s in case p ts of
            Bad s    -> do putStrLn "\nParse              Failed...\n"
                           putStrV v "Tokens:"
@@ -40,11 +39,11 @@ run v p s = let ts = myLLexer s in case p ts of
                           exitFailure
            Ok  tree -> do putStrLn "\nParse Successful!"
                           showTree v tree
-                          frontEnd tree
+
                           exitSuccess
 
 
-showTree ::  Int -> (Program (Maybe (Int, Int))) -> IO ()
+showTree :: (Show a, Print a) => Int -> a -> IO ()
 showTree v tree
  = do
       putStrV v $ "\n[Abstract Syntax]\n\n" ++ show tree
@@ -69,3 +68,8 @@ main = do
     [] -> getContents >>= run 2 pProgram
     "-s":fs -> mapM_ (runFile 0 pProgram) fs
     fs -> mapM_ (runFile 2 pProgram) fs
+
+
+
+
+

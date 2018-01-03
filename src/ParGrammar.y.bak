@@ -140,8 +140,32 @@ LValue :: {
 | Ident '[' Expr ']' {
   (fst $1, AbsGrammar.ValArr (fst $1)(snd $1)(snd $3)) 
 }
-| Ident '.' Ident {
+| LValue1 {
+  (fst $1, snd $1)
+}
+
+LValue2 :: {
+  (Maybe (Int, Int), LValue (Maybe (Int, Int)))
+}
+: LValue '.' LValue {
   (fst $1, AbsGrammar.ValField (fst $1)(snd $1)(snd $3)) 
+}
+| LValue3 {
+  (fst $1, snd $1)
+}
+
+LValue1 :: {
+  (Maybe (Int, Int), LValue (Maybe (Int, Int)))
+}
+: LValue2 {
+  (fst $1, snd $1)
+}
+
+LValue3 :: {
+  (Maybe (Int, Int), LValue (Maybe (Int, Int)))
+}
+: '(' LValue ')' {
+  (Just (tokenLineCol $1), snd $2)
 }
 
 Block :: {
@@ -279,7 +303,7 @@ ClassStmt :: {
 : Type ListItem ';' {
   (fst $1, AbsGrammar.ClVar (fst $1)(snd $1)(snd $2)) 
 }
-| Type Ident '(' ListArg ')' Block ';' {
+| Type Ident '(' ListArg ')' Block {
   (fst $1, AbsGrammar.ClFun (fst $1)(snd $1)(snd $2)(snd $4)(snd $6)) 
 }
 
@@ -288,6 +312,9 @@ Expr6 :: {
 }
 : LValue {
   (fst $1, AbsGrammar.EVar (fst $1)(snd $1)) 
+}
+| 'new' Type {
+  (Just (tokenLineCol $1), AbsGrammar.ENew (Just (tokenLineCol $1)) (snd $2)) 
 }
 | 'new' Type '[' Expr ']' {
   (Just (tokenLineCol $1), AbsGrammar.ENewArr (Just (tokenLineCol $1)) (snd $2)(snd $4)) 
@@ -320,8 +347,8 @@ Expr7 :: {
 : Ident '(' ListExpr ')' {
   (fst $1, AbsGrammar.EApp (fst $1)(snd $1)(snd $3)) 
 }
-| '(' Expr ')' {
-  (Just (tokenLineCol $1), snd $2)
+| Expr8 {
+  (fst $1, snd $1)
 }
 
 Expr5 :: {
@@ -385,6 +412,13 @@ Expr :: {
 }
 | Expr1 {
   (fst $1, snd $1)
+}
+
+Expr8 :: {
+  (Maybe (Int, Int), Expr (Maybe (Int, Int)))
+}
+: '(' Expr ')' {
+  (Just (tokenLineCol $1), snd $2)
 }
 
 ListExpr :: {

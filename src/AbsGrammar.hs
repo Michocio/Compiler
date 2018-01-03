@@ -30,14 +30,16 @@ instance Functor Arg where
     fmap f x = case x of
         Arg a type_ ident -> Arg (f a) (fmap f type_) ident
 data LValue a
-    = ValVar a Ident | ValArr a Ident (Expr a) | ValField a Ident Ident
+    = ValVar a Ident
+    | ValArr a Ident (Expr a)
+    | ValField a (LValue a) (LValue a)
   deriving (Eq, Ord, Show, Read)
 
 instance Functor LValue where
     fmap f x = case x of
         ValVar a ident -> ValVar (f a) ident
         ValArr a ident expr -> ValArr (f a) ident (fmap f expr)
-        ValField a ident1 ident2 -> ValField (f a) ident1 ident2
+        ValField a lvalue1 lvalue2 -> ValField (f a) (fmap f lvalue1) (fmap f lvalue2)
 data Block a = Block a [Stmt a]
   deriving (Eq, Ord, Show, Read)
 
@@ -45,19 +47,19 @@ instance Functor Block where
     fmap f x = case x of
         Block a stmts -> Block (f a) (map (fmap f) stmts)
 data Stmt a
-    = Empty a
-    | BStmt a (Block a)
-    | Decl a (Type a) [Item a]
-    | Ass a (LValue a) (Expr a)
-    | Incr a (LValue a)
-    | Decr a (LValue a)
-    | Ret a (Expr a)
-    | VRet a
-    | Cond a (Expr a) (Stmt a)
-    | CondElse a (Expr a) (Stmt a) (Stmt a)
+    = Empty a--
+    | BStmt a (Block a)--
+    | Decl a (Type a) [Item a]--
+    | Ass a (LValue a) (Expr a)--
+    | Incr a (LValue a)--
+    | Decr a (LValue a)--
+    | Ret a (Expr a)--
+    | VRet a--
+    | Cond a (Expr a) (Stmt a)--
+    | CondElse a (Expr a) (Stmt a) (Stmt a)--
     | While a (Expr a) (Stmt a)
     | For a (Type a) Ident Ident (Stmt a)
-    | SExp a (Expr a)
+    | SExp a (Expr a)--
   deriving (Eq, Ord, Show, Read)
 
 instance Functor Stmt where
@@ -123,6 +125,7 @@ instance Functor ClassStmt where
         ClFun a type_ ident args block -> ClFun (f a) (fmap f type_) ident (map (fmap f) args) (fmap f block)
 data Expr a
     = EVar a (LValue a)
+    | ENew a (Type a)
     | ENewArr a (Type a) (Expr a)
     | ENullCast a (Type a)
     | ELitInt a Integer
@@ -130,6 +133,7 @@ data Expr a
     | ELitFalse a
     | EApp a Ident [Expr a]
     | EClApp a Ident Ident [Expr a]
+    | EArrLen a Ident
     | EString a String
     | Neg a (Expr a)
     | Not a (Expr a)
@@ -143,6 +147,7 @@ data Expr a
 instance Functor Expr where
     fmap f x = case x of
         EVar a lvalue -> EVar (f a) (fmap f lvalue)
+        ENew a type_ -> ENew (f a) (fmap f type_)
         ENewArr a type_ expr -> ENewArr (f a) (fmap f type_) (fmap f expr)
         ENullCast a type_ -> ENullCast (f a) (fmap f type_)
         ELitInt a integer -> ELitInt (f a) integer
@@ -150,6 +155,7 @@ instance Functor Expr where
         ELitFalse a -> ELitFalse (f a)
         EApp a ident exprs -> EApp (f a) ident (map (fmap f) exprs)
         EClApp a ident1 ident2 exprs -> EClApp (f a) ident1 ident2 (map (fmap f) exprs)
+        EArrLen a ident -> EArrLen (f a) ident
         EString a string -> EString (f a) string
         Neg a expr -> Neg (f a) (fmap f expr)
         Not a expr -> Not (f a) (fmap f expr)

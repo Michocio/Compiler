@@ -1,7 +1,9 @@
 all:
-	happy -gca ParGrammar.y
-	alex -g LexGrammar.x
-	ghc --make TestGrammar.hs -o ../release/latte
+	happy -i -gca ParGrammar.y
+	alex -i -g LexGrammar.x
+	ghc --make CompilerMain.hs -o ../release/latte  -idirs:middle/:frontEnd/
+	-rm -f middle/*.log middle/*.aux middle/*.hi middle/*.o middle/*.dvi
+	-rm -f frontEnd/*.log frontEnd/*.aux frontEnd/*.hi frontEnd/*.o frontEnd/*.dvi
 	-rm -f *.log *.aux *.hi *.o *.dvi
 
 clean:

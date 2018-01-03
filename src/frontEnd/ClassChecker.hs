@@ -229,8 +229,6 @@ methodChecker :: StateT Env IO ()
 methodChecker = do
     classes <- getClasses
     bodies <- return $ M.elems classes
-    liftIO $ putStrLn $ "BOOODy"
-    liftIO $ putStrLn $ show bodies
     mapM execClass bodies
     return ()
 
