@@ -49,41 +49,80 @@ data Operand
     | Store
     | Function
     | EmptyOp
+    | Alloca (Type (Maybe (Int, Int)))
   deriving (Eq, Ord, Show, Read)
 data CmpOp  = LTHm | LEm | GTHm | GEm | EQUm | NEm
      deriving (Eq, Ord, Show, Read)
 
 data Argument =
-    NIL | Reg Int | Var String |
+    NIL | Reg Int | Var String Int |
     ValInt Integer | ValBool Bool | ValStr String | ValVoid |
     Label String Int | Fun String
   deriving (Eq, Ord, Show, Read)
+
 
 type Tuple = (Operand, Argument, Argument, Argument)
 
 type Vars = M.Map String Int
 type Labels = M.Map Int (String, Int)
-type EnvMid = (Vars, Int, Int, [Tuple], Labels)
-initialEnvMid = (M.empty, 0::Int, 0::Int, [], M.empty)
+type EnvMid = (Vars, Vars, Int, Int, [Tuple], Labels)
+
+initialEnvMid = (M.empty, M.empty, 0::Int, 0::Int, [], M.empty)
+
+deleteLabel :: Int -> StateT EnvMid IO ()
+deleteLabel nr = do
+    (vars, decls, temps, lab, code, labels) <- get
+    put(vars, decls, temps, lab, code, M.delete nr labels)
+    return ()
+
+getVar ::  String -> StateT EnvMid IO (Argument)
+getVar name = do
+    (vars, decls, a, b, c, d) <- get
+    case (M.lookup name decls) of
+        Nothing -> do
+            return (Var name (fromJust $ M.lookup name vars))
+        (Just x) -> return (Var name x)
+
+genVar :: String -> StateT EnvMid IO (Argument)
+genVar name = do
+    (vars, decls, a, b, c, d) <- get
+    case(M.lookup name vars) of
+        Nothing -> do
+            put (M.insert name 0 vars , decls, a, b, c, d)
+            return (Var name 0)
+        (Just x) -> do
+            put (vars, M.insert name (x + 1) decls, a, b, c, d)
+            return (Var name (x+1))
+
+
+getLabels :: StateT EnvMid IO (Labels)
+getLabels = do
+    (_, _, _, _, _, labels) <- get
+    return labels
+
+getCode :: StateT EnvMid IO ([Tuple])
+getCode = do
+    (_, _, _, _, code, _) <- get
+    return code
 
 emit :: Tuple -> StateT EnvMid IO ()
 emit tuple = do
-    (a, b, c, code, e) <- get
-    put(a, b, c, code ++ [tuple], e)
+    (vars, decls, temps, lab, code, labels) <- get
+    put(vars, decls, temps, lab, code ++ [tuple], labels)
 
 incTemps :: StateT EnvMid IO ()
 incTemps = do
-    (a, b, c, d, e) <- get
-    put(a, b + 1, c, d, e)
+    (vars, decls, temps, lab, code, labels) <- get
+    put(vars, decls, temps + 1, lab, code, labels)
 
 getTemp :: StateT EnvMid IO (Int)
 getTemp = do
-    (_, b, _, _, _) <- get
-    return b
+    (vars, decls, temps, lab, code, labels) <- get
+    return temps
 
 numberOfLine ::  StateT EnvMid IO (Int)
 numberOfLine = do
-    (_, _, _, code, _) <- get
+    (vars, decls, temps, lab, code, labels) <- get
     return $ (length code) - 1
 
 freshTemp :: StateT EnvMid IO (Argument)
@@ -94,24 +133,48 @@ freshTemp = do
 
 genLabel :: String -> StateT EnvMid IO (Int)
 genLabel name = do
-    (a, b, label_num, code, labels) <- get
+    (vars, decls, temps, label_num, code, labels) <- get
     numberOfLine <- return $ length code
-    put(a, b, label_num + 1, code, M.insert label_num (name, numberOfLine) labels)
+    put(vars, decls, temps, label_num + 1, code, M.insert label_num (name, numberOfLine) labels)
     return label_num
+
+putEntryLabel :: StateT EnvMid IO ()
+putEntryLabel = do
+    (vars, decls, temps, label_num, code, labels) <- get
+    if(M.size labels == 0) then do
+        put (vars, decls, temps, label_num + 1, code, M.insert 0 ("entry", 0) labels)
+        return ()
+    else do
+        case (M.lookup 0 labels) of
+            (Just (_, 0)) -> return ()
+            otherwise ->
+                put (vars, decls, temps, label_num + 1, code, M.insert label_num ("entry", 0) labels)
+        return ()
+
+showCode :: StateT EnvMid IO ([((String, Int), Int)])
+showCode = do
+    (vars, decls, temps, label_num, code, labels) <- get
+    lines_ <- return $ map (printTuple) code
+    labels_pos_ <- return $  M.toList labels
+    labels_pos <- return $ map swap labels_pos_
+    sortedLabels <- return $ sortBy (\((_, pos1), _) ((_, pos2), _) -> compare pos1 pos2) labels_pos
+    withLabels <- return $ insertLabels 0 sortedLabels lines_
+    liftIO $ mapM print withLabels
+    return sortedLabels
 
 reserveLabel :: String -> StateT EnvMid IO (Int)
 reserveLabel label = do
-    (a, b, label_num, code, labels) <- get
+    (vars, decls, temps, label_num, code, labels) <- get
     numberOfLine <- return $ length code
-    put(a, b, label_num + 1, code, M.insert label_num (label, (-1))  labels)
+    put(vars, decls, temps, label_num + 1, code, M.insert label_num (label, (-1))  labels)
     return label_num
 
 updateLabel :: Int -> StateT EnvMid IO ()
 updateLabel nr = do
-    (a, b, c, code, labels) <- get
+    (vars, decls, temps, label_num, code, labels) <- get
     (Just (name, _)) <- return $ M.lookup nr labels
     line <- numberOfLine
-    put(a, b, c, code, M.insert nr (name, (line + 1)) labels)
+    put(vars, decls, temps, label_num, code, M.insert nr (name, (line + 1)) labels)
     return ()
 
 insertLabels :: Int -> [((String, Int), Int)] -> [String] -> [String]
@@ -123,7 +186,7 @@ insertLabels i (((lab, pos), ins):xs) curr = insertLabels (i+1) xs (insertElemen
 printArg :: Argument -> String
 printArg NIL = "nil"
 printArg (Reg i) = "t" ++ (show i)
-printArg (Var s) = s
+printArg (Var s n) = s ++"_" ++(show n)
 printArg (ValInt i) = show i
 printArg (ValBool b) = show b
 printArg (ValStr s) = s
@@ -156,7 +219,6 @@ printTuple (op@GotoOp, a1, _, _) =  "     " ++(show op)++ " " ++(printArg a1)
 printTuple (op@ParamOp, a1, _, _) =  "     " ++(show op)++ " " ++(printArg a1)
 printTuple (op@CallOp, a1, _, _) =  "     " ++(show op)++ " " ++(printArg a1)
 printTuple (op@RetOp, a1, _, _) =  "     " ++(show op)++ " " ++(printArg a1)
-printTuple (op@CallOp, a1, _, _) =  "     " ++(show op)++ " " ++(printArg a1)
 printTuple (op@(IfOp how), a1, a2, jmp) = "     " ++
     ("If") ++ " " ++ " " ++ (printArg a1) ++ " " ++ (show how)++" " ++ (printArg a2)
         ++ " jump " ++ (printArg jmp)
@@ -168,3 +230,4 @@ printTuple (op@(Function), a1, _, _) = ("########Funkcja   :" ++ (printArg a1))
 printTuple (op@(GetElemPtr), arr, index, res) =  "     " ++
     (printArg res) ++ " = " ++ ("GetElemPtr") ++ " " ++ " " ++ (printArg arr) ++ " " ++ " " ++ (printArg index)
 printTuple (EmptyOp, _, _, _) = "Empty"
+printTuple (Alloca t, dst, _, _) = "     " ++(printArg dst) ++ " = " ++ "alloca " ++ (show t)
