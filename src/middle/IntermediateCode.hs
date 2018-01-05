@@ -64,12 +64,19 @@ returnJump _ old [] = old
 returnJump y old (x:xs) = returnJump (y+1) old xs
 
 genTopInstr :: TopDefD -> StateT EnvMid IO ()
-genTopInstr fun@(FnDef a type_ ident@(Ident name) args (Block t block)) = do
+genTopInstr fun@(FnDef a type_ ident@(Ident name) args block@(Block t code)) = do
     put initialEnvMid
-    mapM genStmt block
+    params <- return $ map (\(Arg _ t n) ->(t,n)) args
+    edited <- return $ addArguments params code
+    --blocks <- return $ (Block t edited)
+    mapM genStmt edited
     liftIO $ putStrLn $ "##########" ++ (show name) ++ ": "
     printCode
     return ()
+
+addArguments :: [(TypeD, Ident)] -> [Stmt (Maybe (Int, Int))] -> [Stmt (Maybe (Int, Int))]
+addArguments [] x = x
+addArguments ((t,ident):xs) block = addArguments xs ((Decl Nothing t [(NoInit Nothing ident)]):block)
 
 removeDeadCode :: [Tuple] -> [Tuple]
 removeDeadCode code =
@@ -82,15 +89,47 @@ printCode :: StateT EnvMid IO ()
 printCode = do
     emit(EmptyOp, NIL, NIL, NIL)
     putEntryLabel
-    --sortedLabels <- showCode
     removeDupLabels
     sortedLabels <- showCode
     (blocks, graph) <- createBlockGraph sortedLabels
     codes <- (return $ map snd (M.toList blocks))
-    vs <- return $ map usedVars (map snd (M.toList blocks))
-    liftIO $ putStrLn $ show vs
-    news <-(mapM addPhi (zip vs codes))
-    liftIO $ mapM (mapM (print. printTuple)) news
+    lables_sorted <- (return $ sort $ map fst (M.toList blocks))
+    sorts <- return $ sort $ map snd sortedLabels
+    enumed <- mapM enumVars (zip lables_sorted codes)
+    neighbors <- return $ map snd (M.toList graph)
+    codes <- (return $ map snd (M.toList blocks))
+    booles <- return $ replicate (length codes) False
+    maps <- return $ replicate (length codes) M.empty
+    maps_ <- return $ replicate (length codes) M.empty
+    node <- return $ zip5 neighbors codes booles maps maps_
+    tree <- return $ zip lables_sorted node
+    tree_ <- return $ M.fromList tree
+
+    (graph, _, _)<-return $ runIdentity $ execStateT (blockDfs (head $ map snd sortedLabels)
+                (head $ map snd sortedLabels) ) (tree_, M.empty,M.empty)
+    (_, codes, _, phis, _) <- return $ unzip5 $ map snd (M.toList graph)
+    packed<-return $ zip3 lables_sorted (map M.toList phis) codes
+    cor <- mapM createPhis packed
+    liftIO $ putStrLn "DFFFFFFFFFFf"
+    liftIO $ mapM (mapM (print. printTuple)) codes
+    liftIO $ putStrLn "DFdFFFFFf"
+    liftIO $ mapM (mapM (print. printTuple)) cor
+    return ()
+
+
+newPhi :: Int -> ((String, Int), [Argument]) ->  StateT EnvMid IO Tuple
+newPhi block ((name, nr), phi) = do
+    if(length phi == 1) then
+        return (Phi, (Var name nr 0 block), head phi, NIL)
+    else
+        return (Phi, (Var name nr 0 block), head phi, head $ tail phi)
+
+createPhis :: (Int, [((String, Int), [Argument])], [Tuple]) -> StateT EnvMid IO [Tuple]
+createPhis (block, phis, code) = do
+    new_code <- (mapM (newPhi block) phis)
+    return $ (new_code )++ code
+
+
     --edited <- doOpt (map snd (M.toList blocks))
     --edited <- mapM constFolding (map snd (M.toList blocks))
     {-liftIO $ putStrLn "xxxx"
@@ -99,34 +138,147 @@ printCode = do
     k <- return $ map (map (removeDeadUsage b)) edited
     z <- return $ map ((filter isJust)) k
     zz <- return $ map (map fromJust) z
-    --yy <- return $ map removeDeadCode zz
-    liftIO $ putStrLn "YYYYYYYYYYYYYYYYYYYYYYYYYY"
-    liftIO $ mapM (mapM (print. printTuple)) zz
-    liftIO $putStrLn $ show zz
-    liftIO $putStrLn $ show sortedLabels
-    liftIO $putStrLn $ show graph-}
+    --yy <- return $ map removeDeadCode zz-}
+type EnumEnv = (M.Map (String,Int) Int)
+
+enumVars :: (Int, [Tuple]) ->  StateT EnvMid IO ([Tuple])
+enumVars (nr, code) = do
+    x <-  return $ evalState (enumerator nr code) M.empty
+    return x
+
+enumerator :: Int -> [Tuple] -> State EnumEnv [Tuple]
+enumerator nr code = do
+    put (M.empty)
+    mapM (nameVar nr) code
+    --put (M.empty)
+
+nameVar :: Int -> Tuple -> State EnumEnv  (Tuple)
+nameVar nr (op, a1, a2, res) = do
+    arg1 <- countVars nr a1
+    arg2 <- countVars nr a2
+    res_ <- replaceVar nr res
+    return (op, arg1, arg2, res_)
+
+replaceVar :: Int -> Argument -> State EnumEnv (Argument)
+replaceVar id_ arg = do
+    s <- get
+    case (arg) of
+        (Var name nr i _) -> do
+            exists <- return $ M.lookup (name,nr) s
+            case exists of
+                (Just x) -> do
+                    put(M.insert (name, nr) (x+1) s)
+                    return $ (Var name nr (x+1) id_)
+                otherwise -> do
+                    put(M.insert (name, nr) 1 s)
+                    return $ (Var name nr 1 id_)
+        otherwise -> return arg
+
+countVars ::  Int -> Argument -> State EnumEnv  (Argument)
+countVars id_ arg = do
+    s <- get
+    case (arg) of
+        (Var name nr i _) -> do
+            exists <- return $ M.lookup (name,nr) s
+            case exists of
+                (Just x) -> do
+                    return $ (Var name nr x id_)
+                otherwise -> do
+                    put(M.insert (name, nr) 1 s)
+                    return $ (Var name nr 1 id_)
+        otherwise -> return arg
+
+
+
+blockDfs :: Int -> Int -> State FinEnv ()
+blockDfs from node = do
+    (graph, vars,delcs) <- get
+    (Just (neighbors, code, visited, phis, allocs))<- return $ M.lookup node graph
+    already <- return visited
+    mapM (analyzeTuple from node) code
+    (graph, vars,delcs) <- get
+    put(graph, vars, M.empty)
+    if(already) then return ()
+    else do
+        nums <- return $ map (\(Label _ i) -> i) neighbors
+        mapM (blockDfs node) nums
+        return ()
+
+
+analyzeTuple :: Int -> Int -> Tuple -> State FinEnv ()
+analyzeTuple from node (Alloca t, v@(Var name nr ord bl), a, b) = do
+    (graph, vars, decls) <- get
+    (Just (neighbors, code, visited, phis, allocs) )<- return $ M.lookup node graph
+    updated <- return $ M.insert (name, nr) True allocs
+    put(M.insert node (neighbors, code, True, phis, updated) graph, M.insert (name, nr) v vars, decls)
+    return ()
+analyzeTuple from node (AssOp, arg1, v@(Var name nr ord bl), a) = do
+    analyzeArgument from node arg1
+    analyzeArgument from node v
+    (graph, vars, decls) <- get
+    put(graph, M.insert (name, nr) v vars, decls)
     return ()
 
-addPhi :: ([String], [Tuple]) -> StateT EnvMid IO [Tuple]
-addPhi (vars, code) = do
+analyzeTuple from node (op, arg1, arg2, v@(Var name nr ord bl)) = do
+    analyzeArgument from node arg1
+    analyzeArgument from node arg2
+    (graph, vars, decls) <- get
+    put(graph, M.insert (name, nr) v vars, decls)
+    return ()
+analyzeTuple from node (op, arg1, arg2, res) = do
+    analyzeArgument from node arg1
+    analyzeArgument from node arg2
+-- sasiedzi, code, visited, wziete, u siebie aktualny stan
+type FinEnv = (M.Map Int Node, M.Map (String, Int) Argument, M.Map (String, Int) Bool)
+type Node = ([Argument], [Tuple], Bool, M.Map (String, Int) [Argument], M.Map (String, Int) Bool)
+-- graf, visited, blocks,
+
+analyzeArgument :: Int -> Int -> Argument -> State FinEnv ()
+analyzeArgument from node (Var name nr ord bl) = do
+    (graph, vars, decls) <- get
+    (Just (neighbors, code, visited, phis, allocs)) <- return $ M.lookup node graph
+    if(isJust $ M.lookup (name, nr) allocs) then return ()
+    else
+        case (M.lookup (name, nr) decls) of
+            Nothing -> do
+                decls_new <- return $ M.insert (name, nr) True decls
+                case (M.lookup (name, nr) phis) of
+                    Nothing -> do
+                        (Just val) <-return $ M.lookup (name, nr) vars
+                        phi_new <- return $ M.insert (name, nr) [(From from val)] phis
+                        updated <-return (neighbors, code, True, phi_new, allocs)
+                        put(M.insert node updated graph, vars, decls_new)
+                        return ()
+                    (Just x) -> do
+                        (Just val) <-return $ M.lookup (name, nr) vars
+                        phi_new <- return $ M.insert (name, nr) ((From from val):x) phis
+                        updated <-return (neighbors, code, True, phi_new , allocs)
+                        put(M.insert node updated graph, vars, decls_new)
+                        return ()
+            otherwise ->return ()
+analyzeArgument from node x = return ()
+
+addPhi :: ([(String, Int)], [Tuple]) -> StateT EnvMid IO [Tuple]
+addPhi (a, code) = do
+    vars <-  return $ map fst a
     x <- (mapM genPhi vars)
-    y <- return $ x ++ code
+    y <- return $ nub $ x ++ code
     return y
 
 genPhi :: String -> StateT EnvMid IO Tuple
 genPhi name = do
      x <- assingVar name
-     return (Phi, x, From 0 (Var "x" 0 1), From 0 (Var "y" 0 1))
+     return (Phi, x, NIL, NIL)
 
-usedVars :: [Tuple] -> [String]
+usedVars :: [Tuple] -> [(String, Int)]
 usedVars code =
     nub $ foldr (++) [] (map allVars code)
 
-allVars :: Tuple -> [String]
+allVars :: Tuple ->[(String, Int)]
 allVars (op, a1, a2, a3) = (ifVar a1) ++ (ifVar a2)
 
-ifVar :: Argument -> [String]
-ifVar (Var name x y) = [name]
+ifVar :: Argument -> [(String, Int)]
+ifVar (Var name x y z) = [(name,x)]
 ifVar x = []
 
 createBlockGraph :: [((String, Int), Int)] -> StateT EnvMid IO (M.Map Int [Tuple], (M.Map Int [Argument]))
@@ -218,7 +370,6 @@ genControlFlow ((nr, code):xs) (y:ys) graph = do
             updated <- return $ M.insert nr [] graph
             genControlFlow xs  ys updated
         (GotoOp, jmp, _, _) -> do
-            liftIO $ putStrLn "JEEEEEEEEEEESTE"
             updated <- return $ M.insert nr [jmp] graph
             genControlFlow xs (ys) updated
         (otherwise) -> do
@@ -267,10 +418,10 @@ genStmt (Decl _ type_ items_) = do
     return ()
 genStmt  (BStmt x (Block a stmts)) = do
     (vars, decls, temps, labs, code, labels, curr) <- get
-    put(M.union decls vars, decls, temps, labs, code, labels, curr)
+    put(vars, decls, temps, labs, code, labels, curr)
     mapM genStmt stmts
-    (_, _, temps_, labs_, code_, labels_, _) <- get
-    put(vars, decls, temps_, labs_, code_, labels_, curr)
+    (vars_, _, temps_, labs_, code_, labels_, _) <- get
+    put(vars_, decls, temps_, labs_, code_, labels_, curr)
     return ()
 genStmt  (SExp a expr) = do
     genExpr expr
@@ -283,7 +434,7 @@ genStmt (Ass x lvalue@(ValArr a (Ident name) e) expr) = do
     val <- genExpr expr
     index <- genExpr e
     t <- freshTemp
-    emit(GetElemPtr, Var name 0 0, index, t)
+    emit(GetElemPtr, Var name 0 0 0, index, t)
     emit(Store, val, t, NIL)
 genStmt (Ass x var@(ValVar a name) expr) = do
     res <- genExpr expr
@@ -441,7 +592,7 @@ genExpr exp = case exp of
         EVar x lvalue@(ValArr a (Ident name) e) -> do
             index <- genExpr e
             t <- freshTemp
-            emit(GetElemPtr, Var name 0 0, index, t)
+            emit(GetElemPtr, Var name 0 0 0, index, t)
             res <- freshTemp
             emit(Load, t, res, NIL)
             return res

@@ -56,7 +56,7 @@ data CmpOp  = LTHm | LEm | GTHm | GEm | EQUm | NEm
      deriving (Eq, Ord, Show, Read)
 
 data Argument =
-    NIL | Reg Int | Var String Int Int |
+    NIL | Reg Int | Var String Int Int Int |
     ValInt Integer | ValBool Bool | ValStr String | ValVoid |
     Label String Int | Fun String | From Int Argument
   deriving (Eq, Ord, Show, Read)
@@ -82,7 +82,7 @@ assingVar name = do
     num <- return (fromJust $ M.lookup name curr)
     x <- return (fromJust $M.lookup name decls)
     put(vars, M.insert name (x+1) decls, a, b, c, d, curr)
-    return (Var name num (x+1))
+    return (Var name num (x+1) 0)
 
 
 getVar ::  String -> StateT EnvMid IO (Argument)
@@ -90,7 +90,7 @@ getVar name = do
     (vars, decls, a, b, c, d, curr) <- get
     num <- return (fromJust $ M.lookup name curr)
     occurs <- return (fromJust $ M.lookup name decls)
-    return (Var name num occurs)
+    return (Var name num occurs 0)
 
 
 newVar :: String -> StateT EnvMid IO (Argument)
@@ -100,10 +100,10 @@ newVar name = do
     case (num) of
         Nothing -> do
             put (M.insert name 0 vars, M.insert name 0 decls, a, b, c, d, M.insert name 0 current)
-            return (Var name 0 0)
+            return (Var name 0 0 0)
         (Just x) -> do
             put ( M.insert name (x+1) vars, M.insert name 0 decls, a, b, c, d, M.insert name (x+1) current)
-            return (Var name (x+1) 0)
+            return (Var name (x+1) 0 0)
 
 
 getLabels :: StateT EnvMid IO (Labels)
@@ -197,7 +197,7 @@ insertLabels i (((lab, pos), ins):xs) curr = insertLabels (i+1) xs (insertElemen
 printArg :: Argument -> String
 printArg NIL = "nil"
 printArg (Reg i) = "t" ++ (show i)
-printArg (Var s n i) = s ++"_" ++(show n) ++ "_" ++ (show i)
+printArg (Var s n i d) = s ++"_" ++(show n) ++ "_" ++ (show i)  ++ "_" ++ (show d)
 printArg (ValInt i) = show i
 printArg (ValBool b) = show b
 printArg (ValStr s) = s
@@ -205,26 +205,27 @@ printArg (ValVoid) = "void"
 printArg (Label s num) = s ++ (show num)
 printArg (Fun s) = s
 printArg (From b a) = "[" ++ (printArg a) ++", " ++ (show b) ++"]"
+
 printTuple :: Tuple -> String
-printTuple (op@AndOp, a1, a2, res) = "     " ++
+printTuple (op@AndOp, res, a1, a2) = "     " ++
     (printArg res) ++ " = " ++(printArg a1) ++ " "++ (show op) ++" " ++ (printArg a2)
-printTuple (op@AssOp, a1, res, _) = "     " ++
+printTuple (op@AssOp, res, a1, _) = "     " ++
     (printArg res) ++ " = " ++(printArg a1)
-printTuple (op@OrOp, a1, a2, res) =  "     " ++
+printTuple (op@OrOp, res, a1, a2)  =  "     " ++
     (printArg res) ++ " = " ++(printArg a1) ++ " "++ (show op) ++" " ++ (printArg a2)
-printTuple (op@AddOp, a1, a2, res) =  "     " ++
+printTuple (op@AddOp, res, a1, a2)  =  "     " ++
     (printArg res) ++ " = " ++(printArg a1) ++ " "++ (show op) ++" " ++ (printArg a2)
-printTuple (op@SubOp, a1, a2, res) =  "     " ++
+printTuple (op@SubOp, res, a1, a2)  =  "     " ++
     (printArg res) ++ " = " ++(printArg a1) ++ " "++ (show op) ++" " ++ (printArg a2)
-printTuple (op@DivOp, a1, a2, res) =  "     " ++
+printTuple (op@DivOp, res, a1, a2)  =  "     " ++
     (printArg res) ++ " = " ++(printArg a1) ++ " "++ (show op) ++" " ++ (printArg a2)
-printTuple (op@MulOp, a1, a2, res) =  "     " ++
+printTuple (op@MulOp, res, a1, a2)  =  "     " ++
     (printArg res) ++ " = " ++(printArg a1) ++ " "++ (show op) ++" " ++ (printArg a2)
-printTuple (op@ModOp, a1, a2, res) =  "     " ++
+printTuple (op@ModOp, res, a1, a2)  =  "     " ++
     (printArg res) ++ " = " ++(printArg a1) ++ " "++ (show op) ++" " ++ (printArg a2)
-printTuple (op@NegOp, a1, a2, res) =  "     " ++
+printTuple (op@NegOp, res, a1, a2)  =  "     " ++
     (printArg res) ++ " = " ++ (show op)++ " " ++(printArg a1)
-printTuple (op@NotOp, a1, a2, res) =  "     " ++
+printTuple (op@NotOp, res, a1, a2)  =  "     " ++
     (printArg res) ++ " = " ++ (show op)++ " " ++(printArg a1)
 printTuple (op@GotoOp, a1, _, _) =  "     " ++(show op)++ " " ++(printArg a1)
 printTuple (op@ParamOp, a1, _, _) =  "     " ++(show op)++ " " ++(printArg a1)

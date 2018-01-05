@@ -37,8 +37,8 @@ replaceBy  code  (src, dst) =
     map (changeRegs (src, dst)) code
 
 changeRegs :: (Argument, Argument) -> Tuple -> Tuple
-changeRegs (src, dst) (AssOp, arg1, res, arg3) =
-    (AssOp, isDesiredArg arg1 src dst, res, arg3)
+changeRegs (src, dst) (AssOp, res, arg1, NIL) =
+    (AssOp,res, isDesiredArg arg1 src dst, NIL)
 changeRegs (src, dst) (Alloca t, arg1, res, arg3) =
     (Alloca t, arg1, res, arg3)
 changeRegs (src, dst) (op, arg1, arg2, arg3) =
@@ -49,14 +49,14 @@ isDesiredArg x y z = if(x==y) then z else x
 
 addLife :: Argument -> [Argument]
 addLife NIL = []
-addLife a@(Var x y z) = [a]
+addLife a@(Var x y z i) = [a]
 addLife a@(Reg x) = [a]
 addLife x = []
 
 removeDeadUsage :: [Argument] -> Tuple -> Maybe Tuple
-removeDeadUsage ok (AssOp, arg1, res, arg3) =
+removeDeadUsage ok (AssOp, res, arg1, arg3) =
     if ((elem res ok) == False) then Nothing
-    else (Just (AssOp, arg1, res, arg3))
+    else (Just (AssOp, res, arg1, arg3))
 removeDeadUsage ok (Alloca z, arg1, res, arg3) =
     if ((elem arg1 ok) == False) then Nothing
     else (Just (Alloca z, arg1, res, arg3))
