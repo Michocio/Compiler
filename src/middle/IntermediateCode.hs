@@ -82,17 +82,54 @@ printCode :: StateT EnvMid IO ()
 printCode = do
     emit(EmptyOp, NIL, NIL, NIL)
     putEntryLabel
-    sortedLabels <- showCode
+    --sortedLabels <- showCode
     removeDupLabels
     sortedLabels <- showCode
-    blocks <- createBlockGraph sortedLabels
-    edited <- doOpt (map snd (M.toList blocks))
+    (blocks, graph) <- createBlockGraph sortedLabels
+    codes <- (return $ map snd (M.toList blocks))
+    vs <- return $ map usedVars (map snd (M.toList blocks))
+    liftIO $ putStrLn $ show vs
+    news <-(mapM addPhi (zip vs codes))
+    liftIO $ mapM (mapM (print. printTuple)) news
+    --edited <- doOpt (map snd (M.toList blocks))
     --edited <- mapM constFolding (map snd (M.toList blocks))
-    liftIO $ putStrLn "xxxx"
+    {-liftIO $ putStrLn "xxxx"
     liftIO $ mapM (mapM (print. printTuple)) edited
+    (a,b) <- return $ aliveVar ([],[]) (foldr (++) [] edited)
+    k <- return $ map (map (removeDeadUsage b)) edited
+    z <- return $ map ((filter isJust)) k
+    zz <- return $ map (map fromJust) z
+    --yy <- return $ map removeDeadCode zz
+    liftIO $ putStrLn "YYYYYYYYYYYYYYYYYYYYYYYYYY"
+    liftIO $ mapM (mapM (print. printTuple)) zz
+    liftIO $putStrLn $ show zz
+    liftIO $putStrLn $ show sortedLabels
+    liftIO $putStrLn $ show graph-}
     return ()
 
-createBlockGraph :: [((String, Int), Int)] -> StateT EnvMid IO (M.Map Int [Tuple])
+addPhi :: ([String], [Tuple]) -> StateT EnvMid IO [Tuple]
+addPhi (vars, code) = do
+    x <- (mapM genPhi vars)
+    y <- return $ x ++ code
+    return y
+
+genPhi :: String -> StateT EnvMid IO Tuple
+genPhi name = do
+     x <- assingVar name
+     return (Phi, x, From 0 (Var "x" 0 1), From 0 (Var "y" 0 1))
+
+usedVars :: [Tuple] -> [String]
+usedVars code =
+    nub $ foldr (++) [] (map allVars code)
+
+allVars :: Tuple -> [String]
+allVars (op, a1, a2, a3) = (ifVar a1) ++ (ifVar a2)
+
+ifVar :: Argument -> [String]
+ifVar (Var name x y) = [name]
+ifVar x = []
+
+createBlockGraph :: [((String, Int), Int)] -> StateT EnvMid IO (M.Map Int [Tuple], (M.Map Int [Argument]))
 createBlockGraph sorted_blocks = do
     labels <- getLabels
     code <- getCode
@@ -102,8 +139,8 @@ createBlockGraph sorted_blocks = do
     ord <- return $ map fst $ map swap sorted_blocks
     sorted <- return $ sortMap ord res []
     acc <- genControlFlow sorted ord M.empty
-    wynik <- traverseBlocks [] acc res M.empty (Label "" (head ord))
-    return (wynik)
+    wynik <- traverseBlocks [] acc res M.empty (Label "l" (head ord))
+    return (wynik, acc )
 
 removeDupLabels :: StateT EnvMid IO ()
 removeDupLabels = do
@@ -132,11 +169,11 @@ alterLabels :: [Int] -> StateT EnvMid IO ()
 alterLabels same = do
     if(length same == 1) then return ()
     else do
-        leader <- return $ Label "" (head same)
+        leader <- return $ Label "l" (head same)
         changers <- return $ map (\x -> (Label "l" x)) (tail same)
-        (vars, decls, temps, lab, code, labels) <- get
+        (vars, decls, temps, lab, code, labels, curr) <- get
         diff <- return $ map (changeLabel leader changers) code
-        put(vars, decls, temps, lab, diff, labels)
+        put(vars, decls, temps, lab, diff, labels, curr)
         return ()
 
 changeLabel ::  Argument -> [Argument] -> Tuple -> Tuple
@@ -168,7 +205,7 @@ genControlFlow :: [(Int, [Tuple])] -> [Int] -> M.Map Int [Argument] -> StateT En
 genControlFlow [] _ x = return x
 genControlFlow  ((nr, []):xs) (y:ys) graph = do
     if(length xs == 0) then return graph
-    else genControlFlow xs ys (M.insert nr [Label "" (head ys)] graph)
+    else genControlFlow xs ys (M.insert nr [Label "l" (head ys)] graph)
 genControlFlow ((nr, code):xs) (y:ys) graph = do
     instr <- return $ last code
     case (instr) of
@@ -176,18 +213,19 @@ genControlFlow ((nr, code):xs) (y:ys) graph = do
             if(length xs == 0) then
                 genControlFlow xs  ys (M.insert nr [jmp] graph)
             else
-                genControlFlow xs ys(M.insert nr ([Label "" (head ys)]++ [jmp]) graph)
+                genControlFlow xs ys(M.insert nr ([Label "l" (head ys)]++ [jmp]) graph)
         (RetOp, _, _, _) -> do
             updated <- return $ M.insert nr [] graph
             genControlFlow xs  ys updated
         (GotoOp, jmp, _, _) -> do
+            liftIO $ putStrLn "JEEEEEEEEEEESTE"
             updated <- return $ M.insert nr [jmp] graph
             genControlFlow xs (ys) updated
         (otherwise) -> do
             if(length xs == 0) then
                 genControlFlow xs ys (M.insert nr [] graph)
             else
-                genControlFlow xs ys (M.insert nr ([Label "" (head ys)]) graph)
+                genControlFlow xs ys (M.insert nr ([Label "l" (head ys)]) graph)
 
 
 
@@ -214,12 +252,12 @@ genBlock (curr, index, (c:cx), ((nr, l):lx), blocks) = do
 
 genItem :: Type (Maybe (Int, Int)) -> Item (Maybe (Int, Int)) -> StateT EnvMid IO ()
 genItem  t (Init info (Ident name) expr) = do
-    var <- genVar name
+    var <- newVar name
     res <- genExpr expr
     emit(Alloca t, var, NIL, NIL)
     emit(AssOp, res, var, NIL)
 genItem t (NoInit info (Ident name)) =  do
-    var <- genVar name
+    var <- newVar name
     emit(Alloca t, var, NIL, NIL)
     return ()
 
@@ -228,11 +266,11 @@ genStmt (Decl _ type_ items_) = do
     x <- mapM (genItem type_) items_
     return ()
 genStmt  (BStmt x (Block a stmts)) = do
-    (vars, decls, temps, labs, code, labels) <- get
-    put(M.union decls vars, M.empty, temps, labs, code, labels)
+    (vars, decls, temps, labs, code, labels, curr) <- get
+    put(M.union decls vars, decls, temps, labs, code, labels, curr)
     mapM genStmt stmts
-    (_, _, temps_, labs_, code_, labels_) <- get
-    put(vars, decls, temps_, labs_, code_, labels_)
+    (_, _, temps_, labs_, code_, labels_, _) <- get
+    put(vars, decls, temps_, labs_, code_, labels_, curr)
     return ()
 genStmt  (SExp a expr) = do
     genExpr expr
@@ -245,22 +283,25 @@ genStmt (Ass x lvalue@(ValArr a (Ident name) e) expr) = do
     val <- genExpr expr
     index <- genExpr e
     t <- freshTemp
-    emit(GetElemPtr, Var name 0, index, t)
+    emit(GetElemPtr, Var name 0 0, index, t)
     emit(Store, val, t, NIL)
 genStmt (Ass x var@(ValVar a name) expr) = do
     res <- genExpr expr
-    emit(Store, res, Var (snd $ stringLValue var) 0, NIL)
+    ident <- assingVar $ snd $ stringLValue var
+    emit(AssOp, res, ident, NIL)
+    --emit(Store, res, Var (snd $ stringLValue var) 0 0, NIL)
 genStmt (Incr a val) = do
     --temp <- freshTemp
     --emit(Load, Var (snd $ stringLValue val) 0, temp, NIL)
-
     --t <- freshTemp
-    var <- getVar (snd $ stringLValue val)
-    emit(AddOp, var, ValInt 1, var)
+    old <-  getVar (snd $ stringLValue val)
+    var <-  assingVar (snd $ stringLValue val)
+    emit(AddOp, old, ValInt 1, var)
     --emit(Store, t, Var (snd $ stringLValue val) 0, NIL)
 genStmt (Decr a val) = do
-    var <- getVar (snd $ stringLValue val)
-    emit(SubOp, var, ValInt 1, var)
+    old <-  getVar (snd $ stringLValue val)
+    var <-  assingVar (snd $ stringLValue val)
+    emit(SubOp, old, ValInt 1, var)
     --temp <- freshTemp
     --emit(Load, Var (snd $ stringLValue val) 0, temp, NIL)
     --t <- freshTemp
@@ -310,8 +351,11 @@ genStmt (While a expr stmt) = do
     case (expr) of
         (ELitTrue a) -> do
             lTrue_ <- genLabel "l"
+            lEnd_ <- reserveLabel "l"
+            lEnd <- return $ Label  "l" lEnd_
             genStmt (BStmt Nothing $ Block Nothing [stmt])
             emit(GotoOp, Label "l" lTrue_, NIL, NIL)
+            updateLabel lEnd_
         (ELitFalse a) -> return ()
         otherwise -> do
             l1_ <- reserveLabel "l"
@@ -397,7 +441,7 @@ genExpr exp = case exp of
         EVar x lvalue@(ValArr a (Ident name) e) -> do
             index <- genExpr e
             t <- freshTemp
-            emit(GetElemPtr, Var name 0, index, t)
+            emit(GetElemPtr, Var name 0 0, index, t)
             res <- freshTemp
             emit(Load, t, res, NIL)
             return res

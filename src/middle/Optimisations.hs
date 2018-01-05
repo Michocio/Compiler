@@ -47,6 +47,27 @@ changeRegs (src, dst) (op, arg1, arg2, arg3) =
 isDesiredArg :: Argument -> Argument -> Argument -> Argument
 isDesiredArg x y z = if(x==y) then z else x
 
+addLife :: Argument -> [Argument]
+addLife NIL = []
+addLife a@(Var x y z) = [a]
+addLife a@(Reg x) = [a]
+addLife x = []
+
+removeDeadUsage :: [Argument] -> Tuple -> Maybe Tuple
+removeDeadUsage ok (AssOp, arg1, res, arg3) =
+    if ((elem res ok) == False) then Nothing
+    else (Just (AssOp, arg1, res, arg3))
+removeDeadUsage ok (Alloca z, arg1, res, arg3) =
+    if ((elem arg1 ok) == False) then Nothing
+    else (Just (Alloca z, arg1, res, arg3))
+removeDeadUsage a b = Just b
+aliveVar :: ([Argument], [Argument]) -> [Tuple] -> ([Argument], [Argument])
+aliveVar  (declared, used) []= (nub declared, nub used)
+aliveVar (declared, used) ((AssOp, src, dst, NIL):xs) = aliveVar (declared++[dst], used) xs
+aliveVar (declared, used) ((Alloca _, dst, NIL, NIL):xs)= aliveVar (declared++[dst], used) xs
+aliveVar (declared, used) ((op, a1, a2, a3):xs)=
+    aliveVar (declared, used ++ (addLife a1)++ (addLife a2)++ (addLife a3)) xs
+
 doOpt :: [[Tuple]] ->  StateT EnvMid IO [[Tuple]]
 doOpt code = do
     new_code <- constOpt code
