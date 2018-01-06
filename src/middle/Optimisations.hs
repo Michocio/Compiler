@@ -38,14 +38,16 @@ replaceBy  code  (src, dst) =
 
 changeRegs :: (Argument, Argument) -> Tuple -> Tuple
 changeRegs (src, dst) (AssOp, res, arg1, NIL) =
-    (AssOp,res, isDesiredArg arg1 src dst, NIL)
+    (AssOp,res, isDesiredArg src dst arg1 , NIL)
 changeRegs (src, dst) (Alloca t, arg1, res, arg3) =
     (Alloca t, arg1, res, arg3)
+changeRegs (src, dst) (Phi, res, SSA xs, a) =
+    (Phi, res, SSA $ map (\(From b x) -> From b (isDesiredArg src dst x)) xs, a)
 changeRegs (src, dst) (op, arg1, arg2, arg3) =
-    constExpr (op, isDesiredArg arg1 src dst, isDesiredArg arg2 src dst, isDesiredArg arg3 src dst)
+    constExpr (op, isDesiredArg src dst arg1, isDesiredArg src dst arg2, isDesiredArg src dst arg3)
 
 isDesiredArg :: Argument -> Argument -> Argument -> Argument
-isDesiredArg x y z = if(x==y) then z else x
+isDesiredArg y z x = if(x==y) then z else x
 
 addLife :: Argument -> [Argument]
 addLife NIL = []
@@ -61,6 +63,7 @@ removeDeadUsage ok (Alloca z, arg1, res, arg3) =
     if ((elem arg1 ok) == False) then Nothing
     else (Just (Alloca z, arg1, res, arg3))
 removeDeadUsage a b = Just b
+
 aliveVar :: ([Argument], [Argument]) -> [Tuple] -> ([Argument], [Argument])
 aliveVar  (declared, used) []= (nub declared, nub used)
 aliveVar (declared, used) ((AssOp, src, dst, NIL):xs) = aliveVar (declared++[dst], used) xs
@@ -71,23 +74,38 @@ aliveVar (declared, used) ((op, a1, a2, a3):xs)=
 doOpt :: [[Tuple]] ->  StateT EnvMid IO [[Tuple]]
 doOpt code = do
     new_code <- constOpt code
-    liftIO $ putStrLn "oooo"
-    liftIO $ mapM (mapM (print. printTuple)) code
-    liftIO $ putStrLn "new"
-    liftIO $ mapM (mapM (print. printTuple)) new_code
-    if(new_code /= code) then doOpt new_code
-    else return new_code
+    new_code_ <- copyOpt new_code
+--    liftIO $ putStrLn "oooo"
+--    liftIO $ mapM (mapM (print. printTuple)) code
+--    liftIO $ putStrLn "new"
+--    liftIO $ mapM (mapM (print. printTuple)) new_code
+    if(new_code_ /= code) then doOpt new_code_
+    else return new_code_
+
 constOpt :: [[Tuple]] ->  StateT EnvMid IO [[Tuple]]
 constOpt code = do
     consts <- return $ foldr (++) [] (map (map constAss) code)
     pary <- return $ map (fromJust) (filter (isJust) consts)
-    liftIO $ putStrLn $ show pary
+    --liftIO $ putStrLn "new"
+    --liftIO $ putStrLn $ show pary
     blocks <- return $ map (correctCode pary) code
     return blocks
 
---constFolding :: [Tuple] -> StateT EnvMid IO [Tuple]
---constFolding code = do
---    return $ correctCode code consts
+
+
+copyOpt :: [[Tuple]] ->  StateT EnvMid IO [[Tuple]]
+copyOpt code = do
+    copies <- return $ foldr (++) [] (map (map copyAss) code)
+    pary <- return $ map (fromJust) (filter (isJust) copies)
+    --liftIO $ putStrLn "new"
+    --liftIO $ putStrLn $ show pary
+    blocks <- return $ map (correctCode pary) code
+    return blocks
+
+copyAss :: Tuple -> Maybe (Argument, Argument)
+copyAss (AssOp, src, dst, _) = Just (src, dst)
+copyAss _ = Nothing
+
 
 correctCode :: [(Argument, Argument)] -> [Tuple] ->  [Tuple]
 correctCode [] code= code
@@ -95,30 +113,30 @@ correctCode (x:xs) code =
     correctCode xs (replaceBy code x)
 
 constExpr :: Tuple -> Tuple
-constExpr (AndOp, ValBool i1, ValBool i2, res) =
-    (AssOp, ValBool (i1 && i2), res, NIL)
-constExpr (OrOp, ValBool i1, ValBool i2, res) =
-    (OrOp, ValBool (i1 || i2), res, NIL)
-constExpr (AddOp, ValInt i1, ValInt i2, res) =
-    (AssOp, ValInt (i1 + i2), res, NIL)
-constExpr (SubOp, ValInt i1, ValInt i2, res) =
-    (AssOp, ValInt (i1 - i2), res, NIL)
-constExpr (DivOp, ValInt i1, ValInt i2, res) =
-    (AssOp, ValInt (div i1 i2), res, NIL)
-constExpr (MulOp, ValInt i1, ValInt i2, res) =
-    (AssOp, ValInt (i1 * i2), res, NIL)
-constExpr (ModOp, ValInt i1, ValInt i2, res) =
-    (AssOp, ValInt (mod i1 i2), res, NIL)
-constExpr (NegOp, ValInt i1, res, _) =
-    (AssOp, ValInt ((-1) *i1), res, NIL)
-constExpr (NotOp, ValBool i1, res, _) =
-    (AssOp, ValBool (not i1), res, NIL)
+constExpr (AndOp, res, ValBool i1, ValBool i2) =
+    (AssOp, res, ValBool (i1 && i2), NIL)
+constExpr (OrOp, res, ValBool i1, ValBool i2) =
+    (OrOp, res, ValBool (i1 || i2), NIL)
+constExpr (AddOp, res, ValInt i1, ValInt i2) =
+    (AssOp, res, ValInt (i1 + i2), NIL)
+constExpr (SubOp, res, ValInt i1, ValInt i2) =
+    (AssOp, res, ValInt (i1 - i2), NIL)
+constExpr (DivOp, res, ValInt i1, ValInt i2) =
+    (AssOp, res, ValInt (div i1 i2), NIL)
+constExpr (MulOp, res, ValInt i1, ValInt i2) =
+    (AssOp, res, ValInt (i1 * i2), NIL)
+constExpr (ModOp, res, ValInt i1, ValInt i2) =
+    (AssOp, res, ValInt (mod i1 i2), NIL)
+constExpr (NegOp, res, ValInt i1, _) =
+    (AssOp, res, ValInt ((-1) *i1), NIL)
+constExpr (NotOp, res, ValBool i1, _) =
+    (AssOp, res, ValBool (not i1), NIL)
 constExpr x = x
 
 
 constAss :: Tuple -> Maybe (Argument, Argument)
 constAss (AssOp, src, dst, _) =
-    if(isConst src) then Just (dst, src)
+    if(isConst dst) then Just (src, dst)
     else Nothing
 constAss _ = Nothing
 

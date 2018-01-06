@@ -58,7 +58,7 @@ data CmpOp  = LTHm | LEm | GTHm | GEm | EQUm | NEm
 data Argument =
     NIL | Reg Int | Var String Int Int Int |
     ValInt Integer | ValBool Bool | ValStr String | ValVoid |
-    Label String Int | Fun String | From Int Argument
+    Label String Int | Fun String | From Int Argument | SSA [Argument]
   deriving (Eq, Ord, Show, Read)
 
 
@@ -204,7 +204,8 @@ printArg (ValStr s) = s
 printArg (ValVoid) = "void"
 printArg (Label s num) = s ++ (show num)
 printArg (Fun s) = s
-printArg (From b a) = "[" ++ (printArg a) ++", " ++ (show b) ++"]"
+printArg (From x b) = "[" ++ show x ++", " ++ (show b) ++"]"
+printArg (SSA x) = foldr (++) "" $ map printArg x
 
 printTuple :: Tuple -> String
 printTuple (op@AndOp, res, a1, a2) = "     " ++
@@ -243,4 +244,4 @@ printTuple (op@(GetElemPtr), arr, index, res) =  "     " ++
     (printArg res) ++ " = " ++ ("GetElemPtr") ++ " " ++ " " ++ (printArg arr) ++ " " ++ " " ++ (printArg index)
 printTuple (EmptyOp, _, _, _) = "Empty"
 printTuple (Alloca t, dst, _, _) = "     " ++ (printArg dst) ++ " = " ++ "alloca " -- ++ (show t)
-printTuple (Phi, var, a, b) =  "     " ++  (printArg var) ++ " = Phi" ++ " " ++ (printArg a) ++ " " ++ (printArg b)
+printTuple (Phi, var, a, b) =  "     " ++  (printArg var) ++ " = Phi" ++ " " ++ (printArg a) ++ " "
