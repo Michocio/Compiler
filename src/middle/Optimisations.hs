@@ -57,36 +57,65 @@ addLife x = []
 
 removeDeadUsage :: [Argument] -> Tuple -> Maybe Tuple
 removeDeadUsage ok (AssOp, res, arg1, arg3) =
-    if ((elem res ok) == False) then Nothing
-    else (Just (AssOp, res, arg1, arg3))
+    if(res==arg1) then Nothing
+    else
+        if ((elem res ok) == False) then Nothing
+        else (Just (AssOp, res, arg1, arg3))
 removeDeadUsage ok (Alloca z, arg1, res, arg3) =
     if ((elem arg1 ok) == False) then Nothing
     else (Just (Alloca z, arg1, res, arg3))
 removeDeadUsage a b = Just b
 
-aliveVar :: ([Argument], [Argument]) -> [Tuple] -> ([Argument], [Argument])
-aliveVar  (declared, used) []= (nub declared, nub used)
+aliveVar :: ([Argument], [Argument]) -> [Tuple] -> StateT EnvMid IO ([Argument], [Argument])
+aliveVar  (declared, used) [] = return (nub declared, nub used)
 aliveVar (declared, used) ((AssOp, src, dst, NIL):xs) = aliveVar (declared++[dst], used) xs
 aliveVar (declared, used) ((Alloca _, dst, NIL, NIL):xs)= aliveVar (declared++[dst], used) xs
+aliveVar (declared, used) ((Phi, dst, SSA phis, NIL):xs) =
+    aliveVar (declared ++ [dst], (map (\(From b x) -> x) phis) ++ used) xs
 aliveVar (declared, used) ((op, a1, a2, a3):xs)=
     aliveVar (declared, used ++ (addLife a1)++ (addLife a2)++ (addLife a3)) xs
+
 
 doOpt :: [[Tuple]] ->  StateT EnvMid IO [[Tuple]]
 doOpt code = do
     new_code <- constOpt code
     new_code_ <- copyOpt new_code
+    com <- commonExpr new_code_
 --    liftIO $ putStrLn "oooo"
 --    liftIO $ mapM (mapM (print. printTuple)) code
 --    liftIO $ putStrLn "new"
 --    liftIO $ mapM (mapM (print. printTuple)) new_code
-    if(new_code_ /= code) then doOpt new_code_
+    if(com /= code) then doOpt com
     else return new_code_
+
+commonExpr ::  [[Tuple]] ->  StateT EnvMid IO [[Tuple]]
+commonExpr code = do
+    pr <- return $ foldr (++) [] code
+    m <- commonsSet pr M.empty
+    return $ map (map (linkCommon m)) code
+
+linkCommon :: (M.Map Tuple Argument) -> Tuple ->  Tuple
+linkCommon m t@(op, res, a1, a2) = do
+    case (M.lookup (op, NIL, a1, a2) m) of
+        (Nothing) -> t
+        (Just x) -> do
+            if(x==res) then t
+            else (AssOp, res, x, NIL)
+
+commonsSet :: [Tuple] -> (M.Map Tuple Argument) -> StateT EnvMid IO (M.Map Tuple Argument)
+commonsSet [] m = return m
+commonsSet (x@(AddOp, res, a, b):xs) m = do
+    if(isJust $ M.lookup x m) then return m
+    else do
+        commonsSet xs (M.insert (AddOp, NIL, a, b) res m)
+commonsSet (x:xs) m = commonsSet xs m
 
 constOpt :: [[Tuple]] ->  StateT EnvMid IO [[Tuple]]
 constOpt code = do
     consts <- return $ foldr (++) [] (map (map constAss) code)
     pary <- return $ map (fromJust) (filter (isJust) consts)
     --liftIO $ putStrLn "new"
+    --liftIO $ putStrLn $ show code
     --liftIO $ putStrLn $ show pary
     blocks <- return $ map (correctCode pary) code
     return blocks
@@ -113,6 +142,12 @@ correctCode (x:xs) code =
     correctCode xs (replaceBy code x)
 
 constExpr :: Tuple -> Tuple
+constExpr (Phi, res, SSA xs, o) =
+    let (From b x) = head xs in
+       if(any (\t -> t == False) $ map ((\(From _ y) -> x==y)) xs) then
+            (Phi, NIL, SSA xs, o)
+        else
+            (AssOp, NIL, x, NIL)
 constExpr (AndOp, res, ValBool i1, ValBool i2) =
     (AssOp, res, ValBool (i1 && i2), NIL)
 constExpr (OrOp, res, ValBool i1, ValBool i2) =
@@ -136,6 +171,9 @@ constExpr x = x
 
 constAss :: Tuple -> Maybe (Argument, Argument)
 constAss (AssOp, src, dst, _) =
+    if(isConst dst) then Just (src, dst)
+    else Nothing
+constAss (NegOp, src, dst, _) =
     if(isConst dst) then Just (src, dst)
     else Nothing
 constAss _ = Nothing

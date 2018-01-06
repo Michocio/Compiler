@@ -94,6 +94,8 @@ printCode = do
     sortedLabels <- showCode
     (blocks, graph) <- createBlockGraph sortedLabels
     codes <- (return $ map snd (M.toList blocks))
+    uns <-  return $ map snd sortedLabels
+    liftIO $ putStrLn $ show uns
     lables_sorted <- (return $ sort $ map fst (M.toList blocks))
     sorts <- return $ sort $ map snd sortedLabels
     enumed <- mapM enumVars (zip lables_sorted codes)
@@ -110,26 +112,25 @@ printCode = do
     (_, codes, _, phis, _) <- return $ unzip5 $ map snd (M.toList graph)
     packed<-return $ zip3 lables_sorted (map M.toList phis) codes
     cor <- mapM createPhis packed
-    liftIO $ putStrLn "ZZZZZZZZZZZZZ"
-    showBlocks cor
     edited <- doOpt cor
-    liftIO $ putStrLn "xxxx"
-    --showBlocks edited
-    (a,b) <- return $ aliveVar ([],[]) (foldr (++) [] edited)
+    --showBlocks uns edited
+    (a,b) <- aliveVar ([],[]) (foldr (++) [] edited)
     k <- return $ map (map (removeDeadUsage b)) edited
     z <- return $ map ((filter isJust)) k
     zz <- return $ map (map fromJust) z
-    showBlocks zz
+    showBlocks uns zz
     --yy <- return $ map removeDeadCode zz
     return ()
 
 
-showBlocks ::[[Tuple]] -> StateT EnvMid IO ()
-showBlocks [] = return ()
-showBlocks (x:xs) = do
-    liftIO $ mapM (print. printTuple) x
-    liftIO $ putStrLn $ "################"
-    showBlocks xs
+
+
+showBlocks ::[Int] -> [[Tuple]] -> StateT EnvMid IO ()
+showBlocks [] _ = return ()
+showBlocks (nr:rest) tab@(x:xs) = do
+    liftIO $ putStrLn $ "LABEL   " ++ (show nr) ++ ": "
+    liftIO $ mapM (print. printTuple) ((!!) tab nr)
+    showBlocks rest (x:xs)
     return ()
 
 newPhi :: Int -> ((String, Int), [Argument]) ->  StateT EnvMid IO Tuple
@@ -229,7 +230,14 @@ blockDfs from node = do
     (Just (neighbors, code, visited, phis, allocs))<- return $ M.lookup node graph
     already <- return visited
     mapM (analyzeTuple from node) code
+
     (graph, vars,decls) <- get
+    v_ <- return $ map fst (M.toList vars)
+    d_ <- return $ map fst (M.toList decls)
+    to_declare <- return $ (\\) v_ d_
+    mapM (extendPhis from node) to_declare
+    (graph, vars,decls) <- get
+
     if(already) then do
         put(graph, vars_start, M.empty)
         return ()
@@ -239,6 +247,24 @@ blockDfs from node = do
         (graph_, vars_,decls_) <- get
         put (graph_, vars_start, M.empty)
         return ()
+
+
+extendPhis :: Int -> Int ->(String, Int) -> State FinEnv ()
+extendPhis from node (name, nr) = do
+    (graph, vars,decls) <- get
+    (Just (neighbors, code, visited, phis, allocs))<- return $ M.lookup node graph
+    (Just val) <- return $ M.lookup (name, nr) vars
+    case (M.lookup (name, nr) phis) of
+        Nothing -> do
+            phi_new <- return $ M.insert (name, nr) [(From from val)] phis
+            updated <- return (neighbors, code, True, phi_new, allocs)
+            put(M.insert node updated graph, M.insert (name, nr) (Var name nr 0 node) vars, decls)
+            return ()
+        (Just x) -> do
+            phi_new <- return $ M.insert (name, nr) ((From from val):x) phis
+            updated <- return (neighbors, code, True, phi_new, allocs)
+            put(M.insert node updated graph, M.insert (name, nr) (Var name nr 0 node) vars, decls)
+            return ()
 
 
 analyzeTuple :: Int -> Int -> Tuple -> State FinEnv ()
