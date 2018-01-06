@@ -96,6 +96,10 @@ printCode = do
     lables_sorted <- (return $ sort $ map fst (M.toList blocks))
     sorts <- return $ sort $ map snd sortedLabels
     enumed <- mapM enumVars (zip lables_sorted codes)
+    liftIO $ putStrLn "UWAGA"
+    liftIO $ putStrLn $ show lables_sorted
+    liftIO $ putStrLn $ show codes
+    liftIO $ mapM (mapM (print. printTuple)) enumed
     neighbors <- return $ map snd (M.toList graph)
     codes <- (return $ map snd (M.toList blocks))
     booles <- return $ replicate (length codes) False
@@ -114,6 +118,8 @@ printCode = do
     liftIO $ mapM (mapM (print. printTuple)) codes
     liftIO $ putStrLn "DFdFFFFFf"
     liftIO $ mapM (mapM (print. printTuple)) cor
+    liftIO $ putStrLn "zzzzz"
+    liftIO $ putStrLn $ show cor
     return ()
 
 
@@ -153,11 +159,16 @@ enumerator nr code = do
     --put (M.empty)
 
 nameVar :: Int -> Tuple -> State EnumEnv  (Tuple)
-nameVar nr (op, a1, a2, res) = do
+nameVar nr (Alloca t, res, a1, a2) = do
     arg1 <- countVars nr a1
     arg2 <- countVars nr a2
     res_ <- replaceVar nr res
-    return (op, arg1, arg2, res_)
+    return (Alloca t, NIL, NIL, NIL)
+nameVar nr (op, res, a1, a2) = do
+    arg1 <- countVars nr a1
+    arg2 <- countVars nr a2
+    res_ <- replaceVar nr res
+    return (op, res_, arg1, arg2)
 
 replaceVar :: Int -> Argument -> State EnumEnv (Argument)
 replaceVar id_ arg = do
@@ -212,22 +223,25 @@ analyzeTuple from node (Alloca t, v@(Var name nr ord bl), a, b) = do
     updated <- return $ M.insert (name, nr) True allocs
     put(M.insert node (neighbors, code, True, phis, updated) graph, M.insert (name, nr) v vars, decls)
     return ()
-analyzeTuple from node (AssOp, arg1, v@(Var name nr ord bl), a) = do
-    analyzeArgument from node arg1
+analyzeTuple from node (AssOp, v@(Var name nr ord bl), arg1, a) = do
     analyzeArgument from node v
+    analyzeArgument from node arg1
     (graph, vars, decls) <- get
     put(graph, M.insert (name, nr) v vars, decls)
     return ()
 
-analyzeTuple from node (op, arg1, arg2, v@(Var name nr ord bl)) = do
+
+analyzeTuple from node (op, v@(Var name nr ord bl), arg1, arg2) = do
     analyzeArgument from node arg1
     analyzeArgument from node arg2
+    analyzeArgument from node v --ddsd
     (graph, vars, decls) <- get
     put(graph, M.insert (name, nr) v vars, decls)
     return ()
-analyzeTuple from node (op, arg1, arg2, res) = do
+analyzeTuple from node (op, res, arg1, arg2) = do
     analyzeArgument from node arg1
     analyzeArgument from node arg2
+
 -- sasiedzi, code, visited, wziete, u siebie aktualny stan
 type FinEnv = (M.Map Int Node, M.Map (String, Int) Argument, M.Map (String, Int) Bool)
 type Node = ([Argument], [Tuple], Bool, M.Map (String, Int) [Argument], M.Map (String, Int) Bool)
@@ -269,17 +283,6 @@ genPhi :: String -> StateT EnvMid IO Tuple
 genPhi name = do
      x <- assingVar name
      return (Phi, x, NIL, NIL)
-
-usedVars :: [Tuple] -> [(String, Int)]
-usedVars code =
-    nub $ foldr (++) [] (map allVars code)
-
-allVars :: Tuple ->[(String, Int)]
-allVars (op, a1, a2, a3) = (ifVar a1) ++ (ifVar a2)
-
-ifVar :: Argument -> [(String, Int)]
-ifVar (Var name x y z) = [(name,x)]
-ifVar x = []
 
 createBlockGraph :: [((String, Int), Int)] -> StateT EnvMid IO (M.Map Int [Tuple], (M.Map Int [Argument]))
 createBlockGraph sorted_blocks = do
@@ -406,7 +409,7 @@ genItem  t (Init info (Ident name) expr) = do
     var <- newVar name
     res <- genExpr expr
     emit(Alloca t, var, NIL, NIL)
-    emit(AssOp, res, var, NIL)
+    emit(AssOp, var, res, NIL)
 genItem t (NoInit info (Ident name)) =  do
     var <- newVar name
     emit(Alloca t, var, NIL, NIL)
@@ -439,7 +442,7 @@ genStmt (Ass x lvalue@(ValArr a (Ident name) e) expr) = do
 genStmt (Ass x var@(ValVar a name) expr) = do
     res <- genExpr expr
     ident <- assingVar $ snd $ stringLValue var
-    emit(AssOp, res, ident, NIL)
+    emit(AssOp, ident, res, NIL)
     --emit(Store, res, Var (snd $ stringLValue var) 0 0, NIL)
 genStmt (Incr a val) = do
     --temp <- freshTemp
@@ -447,12 +450,12 @@ genStmt (Incr a val) = do
     --t <- freshTemp
     old <-  getVar (snd $ stringLValue val)
     var <-  assingVar (snd $ stringLValue val)
-    emit(AddOp, old, ValInt 1, var)
+    emit(AddOp, var, old, ValInt 1)
     --emit(Store, t, Var (snd $ stringLValue val) 0, NIL)
 genStmt (Decr a val) = do
     old <-  getVar (snd $ stringLValue val)
     var <-  assingVar (snd $ stringLValue val)
-    emit(SubOp, old, ValInt 1, var)
+    emit(SubOp, var, old, ValInt 1)
     --temp <- freshTemp
     --emit(Load, Var (snd $ stringLValue val) 0, temp, NIL)
     --t <- freshTemp
@@ -606,29 +609,29 @@ genExpr exp = case exp of
         Neg a expr -> do
             e <- genExpr expr
             t <- freshTemp
-            emit (NegOp, e, NIL, t)
+            emit (NegOp, t, e, NIL)
             return t
         Not a expr -> do
             e <- genExpr expr
             t <- freshTemp
-            emit (NotOp, e, NIL, t)
+            emit (NotOp, t, e, NIL)
             return t
         EMul a expr1 mulop expr2 -> do
             e1 <- genExpr expr1
             e2 <- genExpr expr2
             t <- freshTemp
             case mulop of
-                Times a -> emit(MulOp, e1, e2, t)
-                Div a -> emit(DivOp, e1, e2, t)
-                Mod a -> emit(ModOp, e1, e2, t)
+                Times a -> emit(MulOp, t,e1, e2)
+                Div a -> emit(DivOp, t,e1, e2)
+                Mod a -> emit(ModOp, t,e1, e2)
             return t
         EAdd a expr1 addop expr2 -> do
             e1 <- genExpr expr1
             e2 <- genExpr expr2
             t <- freshTemp
             case addop of
-                Plus a -> emit(AddOp, e1, e2, t)
-                Minus a -> emit(SubOp, e1, e2, t)
+                Plus a -> emit(AddOp, t,e1, e2)
+                Minus a -> emit(SubOp, t, e1, e2)
             return t
         ERel a expr1 relop expr2 -> do
             e1 <- genExpr expr1
@@ -642,9 +645,9 @@ genExpr exp = case exp of
                 EQU a -> emit(IfOp EQUm, e1, e2,  Label "l" lTrue)
                 NE a -> emit(IfOp NEm, e1, e2,  Label "l" lTrue)
             t <- freshTemp
-            emit(AssOp, ValBool False, t, NIL)
+            emit(AssOp, t, ValBool False, NIL)
             updateLabel lTrue
-            emit(AssOp, ValBool True, t, NIL)
+            emit(AssOp, t, ValBool True,NIL)
             return t
 
         EAnd a expr1 expr2 -> do
@@ -655,10 +658,10 @@ genExpr exp = case exp of
             e2 <- genExpr expr2
             emit(IfOp NEm, e2, ValBool True, Label "l" lFalse)
             t <- freshTemp
-            emit(AssOp, ValBool True, t, NIL)
+            emit(AssOp, t, ValBool True, NIL)
             emit(GotoOp, Label "l" lEnd, NIL, NIL)
             updateLabel lFalse
-            emit(AssOp, ValBool False, t, NIL)
+            emit(AssOp, t, ValBool False, NIL)
             updateLabel lEnd
 
             return t
@@ -670,10 +673,10 @@ genExpr exp = case exp of
             e2 <- genExpr expr2
             emit(IfOp NEm, e2, ValBool True, Label "l"  lTrue)
             t <- freshTemp
-            emit(AssOp, ValBool False, t, NIL)
+            emit(AssOp, t, ValBool False, NIL)
             emit(GotoOp, Label "l" lEnd, NIL, NIL)
             updateLabel  lTrue
-            emit(AssOp, ValBool True, t, NIL)
+            emit(AssOp, t, ValBool True ,NIL)
             updateLabel lEnd
             return t
         EApp a (Ident name) exprs -> do
