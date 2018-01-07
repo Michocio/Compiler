@@ -178,21 +178,21 @@ constExpr (IfOp how, a1, a2, l) =
             if((compFun how) (takeInt a1) (takeInt a2)) then
                 (GotoOp, l, NIL, NIL)
             else
-                if(ifStr a1) then
-                    if((compFun how) (takeStr a1) (takeStr a2)) then
+                (AssOp, ValInt 7, ValInt 7, NIL)
+        else
+            if(ifStr a1) then
+                if((compFun how) (takeStr a1) (takeStr a2)) then
+                    (GotoOp, l, NIL, NIL)
+                else
+                    (AssOp, ValInt 7, ValInt 7, NIL)
+            else
+                if(ifBool a1) then
+                    if((compFun how) (takeBool a1) (takeBool a2)) then
                         (GotoOp, l, NIL, NIL)
                     else
                         (AssOp, ValInt 7, ValInt 7, NIL)
                 else
-                    if(ifBool a1) then
-                        if((compFun how) (takeBool a1) (takeBool a2)) then
-                            (GotoOp, l, NIL, NIL)
-                        else
-                            (AssOp, ValInt 7, ValInt 7, NIL)
-                    else
-                        (IfOp how, a1, a2, l)
-        else
-            (AssOp, ValInt 7, ValInt 7, NIL)
+                    (IfOp how, a1, a2, l)
     else
         (IfOp how, a1, a2, l)
 constExpr x = x

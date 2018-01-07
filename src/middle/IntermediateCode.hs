@@ -67,17 +67,19 @@ genTopInstr :: TopDefD -> StateT EnvMid IO (FunctionCode)
 genTopInstr fun@(FnDef a type_ ident@(Ident name) args block@(Block t code)) = do
     put initialEnvMid
     lEntry <- genLabel "entry"
+    emit(START, NIL, NIL, NIL)
     params <- return $ map (\(Arg _ t n) ->(t,n)) args
-    edited <- return $ addArguments params code
+    (params, size, edited) <- return $ addArguments 0 (reverse params) code
     --blocks <- return $ (Block t edited)
     mapM genStmt edited
     liftIO $ putStrLn $ "##########" ++ (show name) ++ ": "
     (v, i) <- printCode
-    return (ident, i, v)
+    return (ident, i, v, size, params)
 
-addArguments :: [(TypeD, Ident)] -> [Stmt (Maybe (Int, Int))] -> [Stmt (Maybe (Int, Int))]
-addArguments [] x = x
-addArguments ((t,ident):xs) block = addArguments xs ((Decl Nothing t [(NoInit Nothing ident)]):block)
+addArguments :: Int -> [(TypeD, Ident)] -> [Stmt (Maybe (Int, Int))] -> (Int, [Stmt (Maybe (Int, Int))])
+addArguments a [] x = (a,x)
+addArguments a ((t,ident):xs) block =
+    addArguments (a + typeSize t) xs ((Decl Nothing t [(NoInit Nothing ident)]):block)
 
 removeDeadCode :: [Tuple] -> [Tuple]
 removeDeadCode code =
@@ -86,72 +88,62 @@ removeDeadCode code =
         (Just i) -> take i code
 
 
+reorderBlocks :: [Int] -> [((String, Int), Int)] -> [Int] -> [Int]
+reorderBlocks final [] curr = curr
+reorderBlocks final ((_, nr):orginal) curr =
+    if(nr `elem` final) then reorderBlocks final orginal (curr ++ [nr])
+    else reorderBlocks final orginal curr
+
 printCode :: StateT EnvMid IO (M.Map Int Vertex, Int)
 printCode = do
     emit(EmptyOp, NIL, NIL, NIL)
     --putEntryLabel
     removeDupLabels
-    sortedLabels <- showCode
+    sortedLabels <- showCode -- orginal code ordered
+
     (blocks, graph) <- createBlockGraph sortedLabels
-    codes <- (return $ map snd (M.toList blocks))
-    uns <-  return $ map snd sortedLabels
-    first_block <- return $ head uns
-    lables_sorted <- (return $ sort $ map fst (M.toList blocks))
-    sorts <- return $ sort $ map snd sortedLabels
-    enumed <- mapM enumVars (zip lables_sorted codes)
+    --blocks - posortowane juz numerycznie, nie wzgledem kolejnosci
+
+    labels_ordered <- return $ map fst (M.toList blocks)
+    labels_orginal <- return $ reorderBlocks labels_ordered sortedLabels []
+    nums <- return [0.. (length labels_ordered)]
+    labels_mapped <- return $ M.fromList $ zip (sort labels_orginal) nums
+    liftIO $ putStrLn $ show labels_mapped
+    enumed <- mapM enumVars (M.toList blocks)
+
     neighbors <- return $ map snd (M.toList graph)
     codes <- return enumed
     booles <- return $ replicate (length codes) False
     maps <- return $ replicate (length codes) M.empty
     maps_ <- return $ replicate (length codes) M.empty
     node <- return $ zip5 neighbors codes booles maps maps_
-    tree <- return $ zip lables_sorted node
-    tree_ <- return $ M.fromList tree
-    (graph, _, _)<-return $ runIdentity $ execStateT (blockDfs (head $ map snd sortedLabels)
-                (head $ map snd sortedLabels) ) (tree_, M.empty,M.empty)
+    tree <- return $ M.fromList $ zip labels_ordered node
+    (graph, _, _)<- return $ runIdentity $ execStateT (blockDfs 0 0) (tree, M.empty,M.empty)
     (_, codes, _, phis, _) <- return $ unzip5 $ map snd (M.toList graph)
-    packed<-return $ zip3 lables_sorted (map M.toList phis) codes
+    packed <-return $ zip3 labels_ordered (map M.toList phis) codes
+
     cor <- mapM createPhis packed
+
     edited <- doOpt cor
-    --showBlocks uns edited
     (a,b) <- aliveVar ([],[]) (foldr (++) [] edited)
     k <- return $ map (map (removeDeadUsage b)) edited
     z <- return $ map ((filter isJust)) k
     zz <- return $ map (map fromJust) z
-    liftIO $ putStrLn "XXXXXXXXXXXXXX"
-    liftIO $ putStrLn $ show $ length zz
-    liftIO $ putStrLn $ show $ zz
-    liftIO $ mapM  (mapM (print. printTuple)) zz
-    showBlocks sorts uns zz
-    --yy <- return $ map removeDeadCode zz
-    --new_graph <- return $ M.map (\(a,b,c,d,e) -> (b,a))
-    return (M.empty, first_block)
-
-    -- sasiedzi, code, visited, wziete, u siebie aktualny stan
-    --type FinEnv = (M.Map Int Node, M.Map (String, Int) Argument, M.Map (String, Int) Bool)
-    --type Node = ([Argument], [Tuple], Bool, M.Map (String, Int) [Argument], M.Map (String, Int) Bool)
-    -- graf, visited, blocks,
+    liftIO $ putStrLn "KOD OK: "
+    liftIO $ putStrLn $ show zz
+    showBlocks labels_orginal labels_mapped zz
+    final_code <- return $ M.fromList $ zip labels_ordered (zip zz neighbors)
+    return (final_code, 0)
 
 
---showsB :: [[Tuple]] -> StateT EnvMid IO ()
---showsB [] = return ()
---showsB tab@(x:xs) = do
---    if(elem nr ok) then do
---        liftIO $ putStrLn $ "LABEL   " ++ (show nr) ++ ": "
---        liftIO $ mapM (print. printTuple) ((!!) tab nr)
---        showBlocks xs)
+showBlocks :: [Int] -> M.Map Int Int -> [[Tuple]] -> StateT EnvMid IO ()
+showBlocks [] _ _ = return ()
+showBlocks (x:xs) map_ code = do
+    (Just nr) <- return $ M.lookup x map_
+    liftIO $ putStrLn $ "LABEL   " ++ (show x) ++ ": "
+    liftIO $ mapM (print. printTuple) ((!!) code nr)
+    showBlocks xs map_ code
 
-
-
-showBlocks ::[Int] -> [Int] -> [[Tuple]] -> StateT EnvMid IO ()
-showBlocks _ [] _ = return ()
-showBlocks ok (nr:rest) tab@(x:xs) = do
-    if(elem nr ok) then do
-        liftIO $ putStrLn $ "LABEL   " ++ (show nr) ++ ": "
-        liftIO $ mapM (print. printTuple) ((!!) tab nr)
-        showBlocks ok rest (x:xs)
-        return ()
-    else showBlocks ok rest (x:xs)
 
 newPhi :: Int -> ((String, Int), [Argument]) ->  StateT EnvMid IO Tuple
 newPhi block ((name, nr), phi) = do
@@ -469,9 +461,10 @@ genBlock (curr, index, (c:cx), ((nr, l):lx), blocks) = do
 
 genItem :: Type (Maybe (Int, Int)) -> Item (Maybe (Int, Int)) -> StateT EnvMid IO ()
 genItem  t (Init info (Ident name) expr) = do
+    --emit(Alloca t, var, NIL, NIL)
+    res <- genExpr expr
     var <- newVar name
     emit(Alloca t, var, NIL, NIL)
-    res <- genExpr expr
     emit(AssOp, var, res, NIL)
 genItem t (NoInit info (Ident name)) =  do
     var <- newVar name
@@ -557,7 +550,6 @@ genStmt  (Cond info cond ifBlock) = do
             lEnd <- return $ Label  "le" lEnd_
             genCond cond lTrue lEnd lTrue
             updateLabel lTrue_
-            liftIO $ putStrLn $ show ifBlock
             genStmt (BStmt Nothing $ Block Nothing [ifBlock])
             --emit(GotoOp, lEnd, NIL, NIL)
             updateLabel lEnd_

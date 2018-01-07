@@ -28,6 +28,11 @@ import Environment
 import TypesStuff
 import Misc
 
+typeSize :: Type (Maybe (Int, Int)) -> Int
+typeSize (Int a) = 4
+typeSize (Str a) = 4
+typeSize (Bool a) = 1
+
 data Operand
     = AndOp
     | OrOp
@@ -51,11 +56,13 @@ data Operand
     | EmptyOp
     | Alloca (Type (Maybe (Int, Int)))
     | Phi
+    | START
+    | ARGS
   deriving (Eq, Ord, Show, Read)
 data CmpOp  = LTHm | LEm | GTHm | GEm | EQUm | NEm
      deriving (Eq, Ord, Show, Read)
 
-type FunctionCode = (Ident, Int, M.Map Int Vertex)
+type FunctionCode = (Ident, Int, M.Map Int Vertex, Int, [Argument])
 type Vertex = ([Tuple], [Argument])
 
 data Argument =
@@ -113,6 +120,9 @@ getLabels = do
     (_, _, _, _, _, labels, _) <- get
     return labels
 
+
+
+
 getCode :: StateT EnvMid IO ([Tuple])
 getCode = do
     (_, _, _, _, code, _, _) <- get
@@ -151,6 +161,22 @@ genLabel name = do
     put(vars, decls, temps, label_num + 1, code, M.insert label_num (name, numberOfLine) labels, e)
     return label_num
 
+reserveLabel :: String -> StateT EnvMid IO (Int)
+reserveLabel label = do
+    (vars, decls, temps, label_num, code, labels, e) <- get
+    numberOfLine <- return $ length code
+    put(vars, decls, temps, label_num + 1, code, M.insert label_num (label, (-1))  labels, e)
+    return label_num
+
+updateLabel :: Int -> StateT EnvMid IO ()
+updateLabel nr = do
+    (vars, decls, temps, label_num, code, labels, e) <- get
+    (Just (name, _)) <- return $ M.lookup nr labels
+    line <- numberOfLine
+    put(vars, decls, temps, label_num, code, M.insert nr (name, (line + 1)) labels, e)
+    return ()
+
+
 putEntryLabel :: StateT EnvMid IO ()
 putEntryLabel = do
     (vars, decls, temps, label_num, code, labels, e) <- get
@@ -167,8 +193,6 @@ putEntryLabel = do
 showCode :: StateT EnvMid IO ([((String, Int), Int)])
 showCode = do
     (vars, decls, temps, label_num, code, labels, e) <- get
-    liftIO $ putStrLn "LABELS"
-    liftIO $ putStrLn $ show labels
     lines_ <- return $ map (printTuple) code
     labels_pos_ <- return $  M.toList labels
     labels_pos <- return $ map swap labels_pos_
@@ -176,21 +200,6 @@ showCode = do
     withLabels <- return $ insertLabels 0 sortedLabels lines_
     liftIO $ mapM print withLabels
     return sortedLabels
-
-reserveLabel :: String -> StateT EnvMid IO (Int)
-reserveLabel label = do
-    (vars, decls, temps, label_num, code, labels, e) <- get
-    numberOfLine <- return $ length code
-    put(vars, decls, temps, label_num + 1, code, M.insert label_num (label, (-1))  labels, e)
-    return label_num
-
-updateLabel :: Int -> StateT EnvMid IO ()
-updateLabel nr = do
-    (vars, decls, temps, label_num, code, labels, e) <- get
-    (Just (name, _)) <- return $ M.lookup nr labels
-    line <- numberOfLine
-    put(vars, decls, temps, label_num, code, M.insert nr (name, (line + 1)) labels, e)
-    return ()
 
 insertLabels :: Int -> [((String, Int), Int)] -> [String] -> [String]
 insertLabels _ [] a = a
@@ -246,6 +255,8 @@ printTuple (op@(Store), a1, res, _) = "     " ++
 printTuple (op@(Function), a1, _, _) = ("########Funkcja   :" ++ (printArg a1))
 printTuple (op@(GetElemPtr), arr, index, res) =  "     " ++
     (printArg res) ++ " = " ++ ("GetElemPtr") ++ " " ++ " " ++ (printArg arr) ++ " " ++ " " ++ (printArg index)
-printTuple (EmptyOp, _, _, _) = "Empty"
+printTuple (EmptyOp, _, _, _) = "     " ++   "Empty"
 printTuple (Alloca t, dst, _, _) = "     " ++ (printArg dst) ++ " = " ++ "alloca " -- ++ (show t)
 printTuple (Phi, var, a, b) =  "     " ++  (printArg var) ++ " = Phi" ++ " " ++ (printArg a) ++ " "
+printTuple (START, NIL, NIL, NIL) = "     " ++  "START"
+printTuple (ARGS, NIL, NIL, NIL) = "     " ++  "ARGS"
