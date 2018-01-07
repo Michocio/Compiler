@@ -37,20 +37,19 @@ type SimpleBlocks = M.Map Argument [Tuple]
 type ControlFlow = (Argument, [Argument])
 
 
-generateIntermediate :: ProgramD -> IO ()
+generateIntermediate :: ProgramD -> IO ([FunctionCode])
 generateIntermediate p =  (liftIO $ evalStateT (genProgram p) initialEnvMid)
 
-genProgram :: ProgramD -> StateT EnvMid IO ()
-genProgram (Program info []) = return ()
-genProgram  (Program info (x:xs)) = do
-    --lEntry <- genLabel "entry"
-    genTopDef (x:xs)
 
-genTopDef :: [TopDefD] -> StateT EnvMid  IO ()
-genTopDef [] = return ()
-genTopDef  (x:xs) = do
-    genTopInstr x
-    genTopDef xs
+genProgram :: ProgramD -> StateT EnvMid IO ([FunctionCode])
+genProgram (Program info []) = return []
+genProgram  (Program info (x:xs)) = genTopDef [] (x:xs)
+
+genTopDef :: ([FunctionCode]) -> [TopDefD] -> StateT EnvMid  IO ([FunctionCode])
+genTopDef code [] = return code
+genTopDef code (x:xs) = do
+    fun <- genTopInstr x
+    genTopDef (code++[fun]) xs
 
 genBlocks :: [(Argument, (Int, Int))] -> [Tuple] -> SimpleBlocks -> SimpleBlocks
 genBlocks [] _ graph = graph
@@ -64,16 +63,17 @@ returnJump _ old [] = old
 --returnJump x old ((RetOp, _, _, _):xs) = returnJump (x+1) (x:old) xs
 returnJump y old (x:xs) = returnJump (y+1) old xs
 
-genTopInstr :: TopDefD -> StateT EnvMid IO ()
+genTopInstr :: TopDefD -> StateT EnvMid IO (FunctionCode)
 genTopInstr fun@(FnDef a type_ ident@(Ident name) args block@(Block t code)) = do
     put initialEnvMid
+    lEntry <- genLabel "entry"
     params <- return $ map (\(Arg _ t n) ->(t,n)) args
     edited <- return $ addArguments params code
     --blocks <- return $ (Block t edited)
     mapM genStmt edited
     liftIO $ putStrLn $ "##########" ++ (show name) ++ ": "
-    printCode
-    return ()
+    (v, i) <- printCode
+    return (ident, i, v)
 
 addArguments :: [(TypeD, Ident)] -> [Stmt (Maybe (Int, Int))] -> [Stmt (Maybe (Int, Int))]
 addArguments [] x = x
@@ -86,17 +86,16 @@ removeDeadCode code =
         (Just i) -> take i code
 
 
-printCode :: StateT EnvMid IO ()
+printCode :: StateT EnvMid IO (M.Map Int Vertex, Int)
 printCode = do
     emit(EmptyOp, NIL, NIL, NIL)
-    putEntryLabel
+    --putEntryLabel
     removeDupLabels
     sortedLabels <- showCode
     (blocks, graph) <- createBlockGraph sortedLabels
-    liftIO $ putStrLn "XXXXXXXXXXX"
     codes <- (return $ map snd (M.toList blocks))
     uns <-  return $ map snd sortedLabels
-    liftIO $ putStrLn $ show uns
+    first_block <- return $ head uns
     lables_sorted <- (return $ sort $ map fst (M.toList blocks))
     sorts <- return $ sort $ map snd sortedLabels
     enumed <- mapM enumVars (zip lables_sorted codes)
@@ -108,10 +107,8 @@ printCode = do
     node <- return $ zip5 neighbors codes booles maps maps_
     tree <- return $ zip lables_sorted node
     tree_ <- return $ M.fromList tree
-    liftIO $ putStrLn "YYYYYYYYYYYY"
     (graph, _, _)<-return $ runIdentity $ execStateT (blockDfs (head $ map snd sortedLabels)
                 (head $ map snd sortedLabels) ) (tree_, M.empty,M.empty)
-    liftIO $ putStrLn "ZZZZZZZZZZ"
     (_, codes, _, phis, _) <- return $ unzip5 $ map snd (M.toList graph)
     packed<-return $ zip3 lables_sorted (map M.toList phis) codes
     cor <- mapM createPhis packed
@@ -121,13 +118,19 @@ printCode = do
     k <- return $ map (map (removeDeadUsage b)) edited
     z <- return $ map ((filter isJust)) k
     zz <- return $ map (map fromJust) z
-    --liftIO $ mapM (mapM (print. printTuple)) zz
-
-    --liftIO $ putStrLn $ show zz
-    --liftIO $ putStrLn "TTTTT"
+    liftIO $ putStrLn "XXXXXXXXXXXXXX"
+    liftIO $ putStrLn $ show $ length zz
+    liftIO $ putStrLn $ show $ zz
+    liftIO $ mapM  (mapM (print. printTuple)) zz
     showBlocks sorts uns zz
     --yy <- return $ map removeDeadCode zz
-    return ()
+    --new_graph <- return $ M.map (\(a,b,c,d,e) -> (b,a))
+    return (M.empty, first_block)
+
+    -- sasiedzi, code, visited, wziete, u siebie aktualny stan
+    --type FinEnv = (M.Map Int Node, M.Map (String, Int) Argument, M.Map (String, Int) Bool)
+    --type Node = ([Argument], [Tuple], Bool, M.Map (String, Int) [Argument], M.Map (String, Int) Bool)
+    -- graf, visited, blocks,
 
 
 --showsB :: [[Tuple]] -> StateT EnvMid IO ()
@@ -467,24 +470,43 @@ genBlock (curr, index, (c:cx), ((nr, l):lx), blocks) = do
 genItem :: Type (Maybe (Int, Int)) -> Item (Maybe (Int, Int)) -> StateT EnvMid IO ()
 genItem  t (Init info (Ident name) expr) = do
     var <- newVar name
-    res <- genExpr expr
     emit(Alloca t, var, NIL, NIL)
+    res <- genExpr expr
     emit(AssOp, var, res, NIL)
 genItem t (NoInit info (Ident name)) =  do
     var <- newVar name
     emit(Alloca t, var, NIL, NIL)
+    if(info /= Nothing) then do
+        res <- genExpr (defaultValue t)
+        emit(AssOp, var, res, NIL)
+        return ()
+    else return ()
     return ()
+
+defaultValue :: Type (Maybe (Int, Int)) -> Expr (Maybe (Int, Int))
+defaultValue (Int x) = ELitInt x 0
+defaultValue (Str a) = EString a ""
+defaultValue (Bool a) = ELitFalse a
+
 
 genStmt ::Stmt (Maybe(Int, Int)) -> StateT EnvMid IO ()
 genStmt (Decl _ type_ items_) = do
     x <- mapM (genItem type_) items_
     return ()
 genStmt  (BStmt x (Block a stmts)) = do
+    if(x/=Nothing) then do
+        lBlock <- genLabel "l"
+        return ()
+    else return ()
     (vars, decls, temps, labs, code, labels, curr) <- get
     put(vars, decls, temps, labs, code, labels, curr)
     mapM genStmt stmts
     (vars_, _, temps_, labs_, code_, labels_, _) <- get
     put(vars_, decls, temps_, labs_, code_, labels_, curr)
+    if(x/=Nothing) then do
+        lEnd <- genLabel "l"
+        return ()
+    else return ()
     return ()
 genStmt  (SExp a expr) = do
     genExpr expr
@@ -704,10 +726,14 @@ genExpr exp = case exp of
                 GE a -> emit(IfOp GEm, e1, e2, Label "l" lTrue)
                 EQU a -> emit(IfOp EQUm, e1, e2,  Label "l" lTrue)
                 NE a -> emit(IfOp NEm, e1, e2,  Label "l" lTrue)
-            t <- freshTemp
-            emit(AssOp, t, ValBool False, NIL)
+            lFalse <- genLabel "l"
+            t1 <- freshTemp
+            emit(AssOp, t1, ValBool False, NIL)
             updateLabel lTrue
-            emit(AssOp, t, ValBool True,NIL)
+            t2 <- freshTemp
+            emit(AssOp, t2, ValBool True,NIL)
+            t <- freshTemp
+            emit(Phi, t, SSA [(From lFalse t1), (From lTrue t2)], NIL)
             return t
 
         EAnd a expr1 expr2 -> do
@@ -719,13 +745,15 @@ genExpr exp = case exp of
             e2 <- genExpr expr2
             emit(IfOp NEm, e2, ValBool True, Label "l" lFalse)
             lTrue <- genLabel "l"
-            t <- freshTemp
-            emit(AssOp, t, ValBool True, NIL)
+            t1 <- freshTemp
+            emit(AssOp, t1, ValBool True, NIL)
             emit(GotoOp, Label "l" lEnd, NIL, NIL)
             updateLabel lFalse
-            emit(AssOp, t, ValBool False, NIL)
+            t2 <- freshTemp
+            emit(AssOp, t2, ValBool False, NIL)
             updateLabel lEnd
-
+            t <- freshTemp
+            emit(Phi, t, SSA [(From lFalse t1), (From lTrue t2)], NIL)
             return t
         EOr a expr1 expr2 -> do
             e1 <- genExpr expr1
@@ -736,12 +764,15 @@ genExpr exp = case exp of
             e2 <- genExpr expr2
             emit(IfOp NEm, e2, ValBool True, Label "l"  lTrue)
             lOk <- genLabel "l"
-            t <- freshTemp
-            emit(AssOp, t, ValBool False, NIL)
+            t1 <- freshTemp
+            emit(AssOp, t1, ValBool False, NIL)
             emit(GotoOp, Label "l" lEnd, NIL, NIL)
             updateLabel  lTrue
-            emit(AssOp, t, ValBool True ,NIL)
+            t2 <- freshTemp
+            emit(AssOp, t2, ValBool True ,NIL)
             updateLabel lEnd
+            t <- freshTemp
+            emit(Phi, t, SSA [(From lOk t1), (From lTrue t2)], NIL)
             return t
         EApp a (Ident name) exprs -> do
               e <- mapM genExpr exprs

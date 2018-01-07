@@ -14,6 +14,7 @@ import AbsGrammar
 
 import FrontEnd
 import IntermediateCode
+import BackEnd
 
 import ErrM
 
@@ -39,7 +40,8 @@ run v p s = let ts = myLLexer s in case p ts of
            Ok  tree -> do putStrLn "\nParse Successful!"
                           showTree v tree
                           frontEnd tree
-                          generateIntermediate tree
+                          controlGraph <- generateIntermediate tree
+                          generateAsm controlGraph
                           exitSuccess
 
 

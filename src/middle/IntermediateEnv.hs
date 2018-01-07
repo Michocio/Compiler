@@ -55,12 +55,14 @@ data Operand
 data CmpOp  = LTHm | LEm | GTHm | GEm | EQUm | NEm
      deriving (Eq, Ord, Show, Read)
 
+type FunctionCode = (Ident, Int, M.Map Int Vertex)
+type Vertex = ([Tuple], [Argument])
+
 data Argument =
     NIL | Reg Int | Var String Int Int Int |
     ValInt Integer | ValBool Bool | ValStr String | ValVoid |
     Label String Int | Fun String | From Int Argument | SSA [Argument]
   deriving (Eq, Ord, Show, Read)
-
 
 type Tuple = (Operand, Argument, Argument, Argument)
 
@@ -165,6 +167,8 @@ putEntryLabel = do
 showCode :: StateT EnvMid IO ([((String, Int), Int)])
 showCode = do
     (vars, decls, temps, label_num, code, labels, e) <- get
+    liftIO $ putStrLn "LABELS"
+    liftIO $ putStrLn $ show labels
     lines_ <- return $ map (printTuple) code
     labels_pos_ <- return $  M.toList labels
     labels_pos <- return $ map swap labels_pos_
