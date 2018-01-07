@@ -93,6 +93,7 @@ printCode = do
     removeDupLabels
     sortedLabels <- showCode
     (blocks, graph) <- createBlockGraph sortedLabels
+    liftIO $ putStrLn "XXXXXXXXXXX"
     codes <- (return $ map snd (M.toList blocks))
     uns <-  return $ map snd sortedLabels
     liftIO $ putStrLn $ show uns
@@ -107,8 +108,10 @@ printCode = do
     node <- return $ zip5 neighbors codes booles maps maps_
     tree <- return $ zip lables_sorted node
     tree_ <- return $ M.fromList tree
+    liftIO $ putStrLn "YYYYYYYYYYYY"
     (graph, _, _)<-return $ runIdentity $ execStateT (blockDfs (head $ map snd sortedLabels)
                 (head $ map snd sortedLabels) ) (tree_, M.empty,M.empty)
+    liftIO $ putStrLn "ZZZZZZZZZZ"
     (_, codes, _, phis, _) <- return $ unzip5 $ map snd (M.toList graph)
     packed<-return $ zip3 lables_sorted (map M.toList phis) codes
     cor <- mapM createPhis packed
@@ -118,20 +121,34 @@ printCode = do
     k <- return $ map (map (removeDeadUsage b)) edited
     z <- return $ map ((filter isJust)) k
     zz <- return $ map (map fromJust) z
-    showBlocks uns zz
+    --liftIO $ mapM (mapM (print. printTuple)) zz
+
+    --liftIO $ putStrLn $ show zz
+    --liftIO $ putStrLn "TTTTT"
+    showBlocks sorts uns zz
     --yy <- return $ map removeDeadCode zz
     return ()
 
 
+--showsB :: [[Tuple]] -> StateT EnvMid IO ()
+--showsB [] = return ()
+--showsB tab@(x:xs) = do
+--    if(elem nr ok) then do
+--        liftIO $ putStrLn $ "LABEL   " ++ (show nr) ++ ": "
+--        liftIO $ mapM (print. printTuple) ((!!) tab nr)
+--        showBlocks xs)
 
 
-showBlocks ::[Int] -> [[Tuple]] -> StateT EnvMid IO ()
-showBlocks [] _ = return ()
-showBlocks (nr:rest) tab@(x:xs) = do
-    liftIO $ putStrLn $ "LABEL   " ++ (show nr) ++ ": "
-    liftIO $ mapM (print. printTuple) ((!!) tab nr)
-    showBlocks rest (x:xs)
-    return ()
+
+showBlocks ::[Int] -> [Int] -> [[Tuple]] -> StateT EnvMid IO ()
+showBlocks _ [] _ = return ()
+showBlocks ok (nr:rest) tab@(x:xs) = do
+    if(elem nr ok) then do
+        liftIO $ putStrLn $ "LABEL   " ++ (show nr) ++ ": "
+        liftIO $ mapM (print. printTuple) ((!!) tab nr)
+        showBlocks ok rest (x:xs)
+        return ()
+    else showBlocks ok rest (x:xs)
 
 newPhi :: Int -> ((String, Int), [Argument]) ->  StateT EnvMid IO Tuple
 newPhi block ((name, nr), phi) = do
@@ -698,8 +715,10 @@ genExpr exp = case exp of
             lFalse <- reserveLabel "l"
             lEnd <- reserveLabel "l"
             emit(IfOp NEm, e1, ValBool True, Label "l" lFalse)
+            lSec <- genLabel "l"
             e2 <- genExpr expr2
             emit(IfOp NEm, e2, ValBool True, Label "l" lFalse)
+            lTrue <- genLabel "l"
             t <- freshTemp
             emit(AssOp, t, ValBool True, NIL)
             emit(GotoOp, Label "l" lEnd, NIL, NIL)
@@ -713,8 +732,10 @@ genExpr exp = case exp of
             lTrue <- reserveLabel "l"
             lEnd <- reserveLabel "l"
             emit(IfOp NEm, e1, ValBool True, Label "l" lTrue)
+            lSec <- genLabel "l"
             e2 <- genExpr expr2
             emit(IfOp NEm, e2, ValBool True, Label "l"  lTrue)
+            lOk <- genLabel "l"
             t <- freshTemp
             emit(AssOp, t, ValBool False, NIL)
             emit(GotoOp, Label "l" lEnd, NIL, NIL)
@@ -726,7 +747,7 @@ genExpr exp = case exp of
               e <- mapM genExpr exprs
               mapM emitArg e
               t <- freshTemp
-              emit(CallOp, Fun name, NIL, t)
+              emit(CallOp, Fun name, t, NIL)
               return t
         --EClApp a ident1 ident2 exprs -> EClApp (f a) ident1 ident2 (map (fmap f) exprs)
     --    EArrLen a ident -> EArrLen (f a) ident

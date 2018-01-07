@@ -230,7 +230,7 @@ printTuple (op@NotOp, res, a1, a2)  =  "     " ++
     (printArg res) ++ " = " ++ (show op)++ " " ++(printArg a1)
 printTuple (op@GotoOp, a1, _, _) =  "     " ++(show op)++ " " ++(printArg a1)
 printTuple (op@ParamOp, a1, _, _) =  "     " ++(show op)++ " " ++(printArg a1)
-printTuple (op@CallOp, a1, _, _) =  "     " ++(show op)++ " " ++(printArg a1)
+printTuple (op@CallOp, a1, x, _) =  "     " ++ (show x)++" = "++(show op)++ " " ++(printArg a1)
 printTuple (op@RetOp, a1, _, _) =  "     " ++(show op)++ " " ++(printArg a1)
 printTuple (op@(IfOp how), a1, a2, jmp) = "     " ++
     ("If") ++ " " ++ " " ++ (printArg a1) ++ " " ++ (show how)++" " ++ (printArg a2)

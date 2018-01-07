@@ -42,9 +42,11 @@ changeRegs (src, dst) (AssOp, res, arg1, NIL) =
 changeRegs (src, dst) (Alloca t, arg1, res, arg3) =
     (Alloca t, arg1, res, arg3)
 changeRegs (src, dst) (Phi, res, SSA xs, a) =
-    (Phi, res, SSA $ map (\(From b x) -> From b (isDesiredArg src dst x)) xs, a)
+    constExpr (Phi, res, SSA $ map (\(From b x) -> From b (isDesiredArg src dst x)) xs, a)
+--changeRegs (src, dst) (ParamOp, arg1, arg2, arg3) =
+--    constExpr (ParamOp, isDesiredArg src dst  arg1, isDesiredArg src dst arg2, isDesiredArg src dst arg3)
 changeRegs (src, dst) (op, arg1, arg2, arg3) =
-    constExpr (op, isDesiredArg src dst arg1, isDesiredArg src dst arg2, isDesiredArg src dst arg3)
+    constExpr (op, isDesiredArg src dst  arg1, isDesiredArg src dst arg2, isDesiredArg src dst arg3)
 
 isDesiredArg :: Argument -> Argument -> Argument -> Argument
 isDesiredArg y z x = if(x==y) then z else x
@@ -64,14 +66,18 @@ removeDeadUsage ok (AssOp, res, arg1, arg3) =
 removeDeadUsage ok (Alloca z, arg1, res, arg3) =
     if ((elem arg1 ok) == False) then Nothing
     else (Just (Alloca z, arg1, res, arg3))
+removeDeadUsage ok (Phi, res, phis, arg3) =
+    if ((elem res ok) == False) then Nothing
+    else (Just (Phi, res, phis, arg3))
 removeDeadUsage a b = Just b
 
 aliveVar :: ([Argument], [Argument]) -> [Tuple] -> StateT EnvMid IO ([Argument], [Argument])
 aliveVar  (declared, used) [] = return (nub declared, nub used)
 aliveVar (declared, used) ((AssOp, src, dst, NIL):xs) = aliveVar (declared++[dst], used) xs
 aliveVar (declared, used) ((Alloca _, dst, NIL, NIL):xs)= aliveVar (declared++[dst], used) xs
-aliveVar (declared, used) ((Phi, dst, SSA phis, NIL):xs) =
-    aliveVar (declared ++ [dst], (map (\(From b x) -> x) phis) ++ used) xs
+aliveVar (declared, used) ((Phi, dst, SSA phis, NIL):xs) = let
+    filtered = filter (\(From b x) -> x/=dst) phis in
+        aliveVar (declared ++ [dst], (map (\(From b x) -> x) filtered) ++ used) xs
 aliveVar (declared, used) ((op, a1, a2, a3):xs)=
     aliveVar (declared, used ++ (addLife a1)++ (addLife a2)++ (addLife a3)) xs
 
@@ -82,8 +88,8 @@ doOpt code = do
     new_code_ <- copyOpt new_code
     com <- commonExpr new_code_
 --    liftIO $ putStrLn "oooo"
---    liftIO $ mapM (mapM (print. printTuple)) code
---    liftIO $ putStrLn "new"
+    --liftIO $ mapM (mapM (print. printTuple)) new_code
+    --liftIO $ putStrLn $ show code
 --    liftIO $ mapM (mapM (print. printTuple)) new_code
     if(com /= code) then doOpt com
     else return new_code_
@@ -137,7 +143,7 @@ copyAss _ = Nothing
 
 
 correctCode :: [(Argument, Argument)] -> [Tuple] ->  [Tuple]
-correctCode [] code= code
+correctCode [] code = replaceBy code (NIL, NIL)
 correctCode (x:xs) code =
     correctCode xs (replaceBy code x)
 
@@ -145,9 +151,9 @@ constExpr :: Tuple -> Tuple
 constExpr (Phi, res, SSA xs, o) =
     let (From b x) = head xs in
        if(any (\t -> t == False) $ map ((\(From _ y) -> x==y)) xs) then
-            (Phi, NIL, SSA xs, o)
+            (Phi, res, SSA xs, o)
         else
-            (AssOp, NIL, x, NIL)
+            (AssOp, res, x, NIL)
 constExpr (AndOp, res, ValBool i1, ValBool i2) =
     (AssOp, res, ValBool (i1 && i2), NIL)
 constExpr (OrOp, res, ValBool i1, ValBool i2) =
@@ -166,16 +172,58 @@ constExpr (NegOp, res, ValInt i1, _) =
     (AssOp, res, ValInt ((-1) *i1), NIL)
 constExpr (NotOp, res, ValBool i1, _) =
     (AssOp, res, ValBool (not i1), NIL)
+constExpr (IfOp how, a1, a2, l) =
+    if(isConst a1 && isConst a2) then
+        if(ifInt a1) then
+            if((compFun how) (takeInt a1) (takeInt a2)) then
+                (GotoOp, l, NIL, NIL)
+            else
+                if(ifStr a1) then
+                    if((compFun how) (takeStr a1) (takeStr a2)) then
+                        (GotoOp, l, NIL, NIL)
+                    else
+                        (AssOp, ValInt 7, ValInt 7, NIL)
+                else
+                    if(ifBool a1) then
+                        if((compFun how) (takeBool a1) (takeBool a2)) then
+                            (GotoOp, l, NIL, NIL)
+                        else
+                            (AssOp, ValInt 7, ValInt 7, NIL)
+                    else
+                        (IfOp how, a1, a2, l)
+        else
+            (AssOp, ValInt 7, ValInt 7, NIL)
+    else
+        (IfOp how, a1, a2, l)
 constExpr x = x
 
+ifInt (ValInt i) = True
+ifInt _ = False
+ifBool (ValBool b) = True
+ifBool _ = False
+ifStr (ValStr s) = True
+ifStr _ = False
+
+takeInt (ValInt i) = i
+takeBool (ValBool b) = b
+takeStr (ValStr s) = s
+
+
+
+compFun ::(Ord a) => CmpOp -> (a->a->Bool)
+compFun LTHm = (<)
+compFun LEm = (<=)
+compFun GTHm = (>)
+compFun GEm = (>=)
+compFun EQUm = (==)
+compFun NEm = (/=)
 
 constAss :: Tuple -> Maybe (Argument, Argument)
 constAss (AssOp, src, dst, _) =
     if(isConst dst) then Just (src, dst)
     else Nothing
-constAss (NegOp, src, dst, _) =
-    if(isConst dst) then Just (src, dst)
-    else Nothing
+constAss (NegOp, src, ValInt i1, _) =
+    Just (src, ValInt ((-1) *i1))
 constAss _ = Nothing
 
 isConst :: Argument -> Bool
