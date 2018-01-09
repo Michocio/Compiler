@@ -5,7 +5,6 @@ import Control.Monad.Writer.Lazy
 import Control.Monad.Reader
 import Control.Monad.State
 import Control.Applicative
-import Control.Monad.Except
 import qualified Data.Map as M
 import Data.Char
 import LexGrammar
@@ -58,6 +57,13 @@ type TypeD = Type (Maybe (Int, Int))
 type BlockD = Block (Maybe (Int, Int))
 
 initialEnv = (M.empty, M.empty, M.fromList predefinied, M.empty)
+
+printType ::  TypeD -> String
+printType (Int x) = "int"
+printType (Str x) = "string"
+printType (Bool x) = "boolean"
+printType (Void x) = "void"
+printType x = show x
 
 getTypeOfFun :: Ident ->  StateT Env IO (Maybe TypeD)
 getTypeOfFun name = do

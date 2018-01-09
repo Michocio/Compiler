@@ -5,7 +5,6 @@ import Control.Monad.Writer.Lazy
 import Control.Monad.Reader
 import Control.Monad.State
 import Control.Applicative
-import Control.Monad.Except
 import qualified Data.Map as M
 import Data.Char
 import LexGrammar
@@ -28,10 +27,35 @@ import Environment
 import TypesStuff
 import Misc
 
-typeSize :: Type (Maybe (Int, Int)) -> Int
-typeSize (Int a) = 4
-typeSize (Str a) = 4
-typeSize (Bool a) = 1
+typeSize :: Type (Maybe (Int, Int)) -> String
+typeSize (Int a) = "i32"
+typeSize (Str a) = "i8*"
+typeSize (Bool a) = "i1"
+typeSize (Void a) = "void"
+typeSize _ = "i32"
+removeDummyTuple :: Tuple -> Maybe Tuple
+removeDummyTuple (EmptyOp, _, _, _) = Nothing
+removeDummyTuple (Alloca t, dst, _, _) = Nothing
+removeDummyTuple (TEXT, _, _, _) = Nothing
+--removeDummyTuple (Phi, var, a, b) =  Nothing
+removeDummyTuple (START, NIL, NIL, NIL) = Nothing
+removeDummyTuple (ARGS, NIL, NIL, NIL) = Nothing
+removeDummyTuple x = Just x
+
+typeLLVM :: Argument -> Type (Maybe (Int, Int))
+typeLLVM (ValInt i) = (Int Nothing)
+typeLLVM (ValBool b) = (Bool Nothing)
+typeLLVM (ValStr s) = (Str Nothing)
+typeLLVM (ValVoid) = (Void Nothing)
+
+showBlocks :: [Int] -> M.Map Int Int -> [[Tuple]] -> StateT EnvMid IO ()
+showBlocks [] _ _ = return ()
+showBlocks (x:xs) map_ code = do
+    (Just nr) <- return $ M.lookup x map_
+    liftIO $ putStrLn $ "LABEL   " ++ (show x) ++ ": "
+    liftIO $ mapM (print. printTuple) ((!!) code nr)
+    showBlocks xs map_ code
+
 
 data Operand
     = AndOp
@@ -56,19 +80,35 @@ data Operand
     | EmptyOp
     | Alloca (Type (Maybe (Int, Int)))
     | Phi
+    | PhiTyped (Type (Maybe (Int, Int)))
     | START
     | ARGS
+    | Icmp CmpOp
+    | IcmpTyped (Type (Maybe (Int, Int))) CmpOp
+    | Br
+    | CallFun (Type (Maybe (Int, Int)))
+    | RetOpTyped (Type (Maybe (Int, Int)))
+    | BitCast
+    | TEXT
+    | CONCAT
   deriving (Eq, Ord, Show, Read)
 data CmpOp  = LTHm | LEm | GTHm | GEm | EQUm | NEm
      deriving (Eq, Ord, Show, Read)
 
-type FunctionCode = (Ident, Int, M.Map Int Vertex, Int, [Argument])
+type FunctionDef =
+    (Ident, Type (Maybe (Int, Int)), [(Type (Maybe (Int, Int)), Ident)] , [Int], M.Map Int Vertex)
 type Vertex = ([Tuple], [Argument])
+
+ifVar :: Argument -> Bool
+ifVar (Var _ _ _ _) = True
+ifVar _ = False
+
 
 data Argument =
     NIL | Reg Int | Var String Int Int Int |
     ValInt Integer | ValBool Bool | ValStr String | ValVoid |
-    Label String Int | Fun String | From Int Argument | SSA [Argument]
+    Label String Int | Fun String | From Int Argument | SSA [Argument] |
+    Args [(Type (Maybe(Int, Int)), Argument)] | GlobalVar String
   deriving (Eq, Ord, Show, Read)
 
 type Tuple = (Operand, Argument, Argument, Argument)
@@ -120,8 +160,14 @@ getLabels = do
     (_, _, _, _, _, labels, _) <- get
     return labels
 
-
-
+replaceIf :: [Tuple] -> [Tuple] ->  StateT EnvMid IO ([Tuple])
+replaceIf xs []  = return xs
+replaceIf old ((IfOp how, a1, a2, lab):xs)= do
+    t <- freshTemp
+    first <- return $ (Icmp how, t, a1, a2)
+    sec <- return (Br, t, lab, Label "l" (-1))
+    replaceIf (old ++ [first, sec]) xs
+replaceIf old  (x:xs) = replaceIf (old ++ [x]) xs
 
 getCode :: StateT EnvMid IO ([Tuple])
 getCode = do
@@ -129,6 +175,10 @@ getCode = do
     return code
 
 emit :: Tuple -> StateT EnvMid IO ()
+--emit (IfOp how, a1, a2,lab) = do
+    --t <- freshTemp
+    --emit (Icmp how, t, a1, a2)
+    --emit (Br, t, lab, Label "l" (-6))
 emit tuple = do
     (vars, decls, temps, lab, code, labels, e) <- get
     put(vars, decls, temps, lab, code ++ [tuple], labels, e)
@@ -209,18 +259,26 @@ insertLabels i (((lab, pos), ins):xs) curr = insertLabels (i+1) xs (insertElemen
 
 printArg :: Argument -> String
 printArg NIL = "nil"
-printArg (Reg i) = "t" ++ (show i)
-printArg (Var s n i d) = s ++"_" ++(show n) ++ "_" ++ (show i)  ++ "_" ++ (show d)
+printArg (Reg i) = "%t" ++ (show i)
+printArg (Var s n i d) = "%" ++ s ++"_" ++(show n) ++ "_" ++ (show i)  ++ "_" ++ (show d)
 printArg (ValInt i) = show i
-printArg (ValBool b) = show b
+printArg (ValBool True) = "true"
+printArg (ValBool False) = "false"
 printArg (ValStr s) = s
 printArg (ValVoid) = "void"
-printArg (Label s num) = s ++ (show num)
-printArg (Fun s) = s
-printArg (From x b) = "[" ++ show x ++", " ++ (show b) ++"]"
-printArg (SSA x) = foldr (++) "" $ map printArg x
+printArg (Label s num) = "%" ++ s ++ (show num)
+printArg (Fun s) = "@"++ s
+printArg (From x b) = "[" ++ (printArg b) ++", " ++ ("%l" ++ show x)  ++"]"
+printArg (SSA x) = intercalate ", " $ map printArg x
+printArg (Args a) = intercalate ", " (map printParam a)
+
+printParam :: (Type (Maybe(Int, Int)), Argument) -> String
+printParam (t, a) = (typeSize t) ++ " " ++ (printArg a)
+
 
 printTuple :: Tuple -> String
+printTuple (CONCAT, res, a1, a2) =
+    "     " ++ (printArg res) ++ " = call i8* @concat(" ++ "i8*"++ (printArg a1) ++ ", " ++ "i8*"++ (printArg a2) ++")"
 printTuple (op@AndOp, res, a1, a2) = "     " ++
     (printArg res) ++ " = " ++(printArg a1) ++ " "++ (show op) ++" " ++ (printArg a2)
 printTuple (op@AssOp, res, a1, _) = "     " ++
@@ -228,23 +286,27 @@ printTuple (op@AssOp, res, a1, _) = "     " ++
 printTuple (op@OrOp, res, a1, a2)  =  "     " ++
     (printArg res) ++ " = " ++(printArg a1) ++ " "++ (show op) ++" " ++ (printArg a2)
 printTuple (op@AddOp, res, a1, a2)  =  "     " ++
-    (printArg res) ++ " = " ++(printArg a1) ++ " "++ (show op) ++" " ++ (printArg a2)
+    (printArg res) ++ " = add i32 " ++(printArg a1) ++ ", " ++ (printArg a2)
 printTuple (op@SubOp, res, a1, a2)  =  "     " ++
-    (printArg res) ++ " = " ++(printArg a1) ++ " "++ (show op) ++" " ++ (printArg a2)
+    (printArg res) ++ " = sub i32 " ++(printArg a1) ++ ", " ++ (printArg a2)
 printTuple (op@DivOp, res, a1, a2)  =  "     " ++
-    (printArg res) ++ " = " ++(printArg a1) ++ " "++ (show op) ++" " ++ (printArg a2)
+    (printArg res) ++ " = sdiv i32 " ++(printArg a1) ++ ", "  ++ (printArg a2)
 printTuple (op@MulOp, res, a1, a2)  =  "     " ++
-    (printArg res) ++ " = " ++(printArg a1) ++ " "++ (show op) ++" " ++ (printArg a2)
+    (printArg res) ++ " = mul i32 " ++ (printArg a1) ++  ", "  ++ (printArg a2)
 printTuple (op@ModOp, res, a1, a2)  =  "     " ++
-    (printArg res) ++ " = " ++(printArg a1) ++ " "++ (show op) ++" " ++ (printArg a2)
+    (printArg res) ++ " = srem i32 " ++(printArg a1) ++ ", " ++ (printArg a2)
 printTuple (op@NegOp, res, a1, a2)  =  "     " ++
-    (printArg res) ++ " = " ++ (show op)++ " " ++(printArg a1)
+    (printArg res) ++ " = xor i1" ++ (printArg a1) ++ ", " ++(printArg a2)
 printTuple (op@NotOp, res, a1, a2)  =  "     " ++
-    (printArg res) ++ " = " ++ (show op)++ " " ++(printArg a1)
-printTuple (op@GotoOp, a1, _, _) =  "     " ++(show op)++ " " ++(printArg a1)
+    (printArg res) ++ " = mul i32" ++ (printArg a1) ++  ", "  ++ (printArg a2)
+printTuple (op@GotoOp, a1, _, _) =  "     " ++
+    "br label " ++ (printArg a1)
 printTuple (op@ParamOp, a1, _, _) =  "     " ++(show op)++ " " ++(printArg a1)
 printTuple (op@CallOp, a1, x, _) =  "     " ++ (show x)++" = "++(show op)++ " " ++(printArg a1)
-printTuple (op@RetOp, a1, _, _) =  "     " ++(show op)++ " " ++(printArg a1)
+printTuple (RetOpTyped t, a1, _, _) =
+    if((typeSize t ) == "void") then ("     " ++ "ret void")
+    else
+        "     " ++ "ret " ++ (typeSize t )++ " "++(printArg a1)
 printTuple (op@(IfOp how), a1, a2, jmp) = "     " ++
     ("If") ++ " " ++ " " ++ (printArg a1) ++ " " ++ (show how)++" " ++ (printArg a2)
         ++ " jump " ++ (printArg jmp)
@@ -256,7 +318,36 @@ printTuple (op@(Function), a1, _, _) = ("########Funkcja   :" ++ (printArg a1))
 printTuple (op@(GetElemPtr), arr, index, res) =  "     " ++
     (printArg res) ++ " = " ++ ("GetElemPtr") ++ " " ++ " " ++ (printArg arr) ++ " " ++ " " ++ (printArg index)
 printTuple (EmptyOp, _, _, _) = "     " ++   "Empty"
-printTuple (Alloca t, dst, _, _) = "     " ++ (printArg dst) ++ " = " ++ "alloca " -- ++ (show t)
-printTuple (Phi, var, a, b) =  "     " ++  (printArg var) ++ " = Phi" ++ " " ++ (printArg a) ++ " "
+printTuple (Alloca t, dst, _, _) = "     " ++ (printArg dst) ++ " = " ++ "alloca " ++ (show t)
+printTuple (Phi, var, a, b) =  "     " ++  (printArg var) ++ " = phi i32 " ++ " " ++ (printArg a) ++ " "
+printTuple (PhiTyped t, var, a, b) =
+    "     " ++  (printArg var) ++ " = phi " ++ (typeSize t) ++ " " ++ (printArg a) ++ " "
 printTuple (START, NIL, NIL, NIL) = "     " ++  "START"
 printTuple (ARGS, NIL, NIL, NIL) = "     " ++  "ARGS"
+printTuple (Br, t, l1, l2) = "     " ++
+    "br i1 " ++ (printArg t)++ ", "  ++ "label " ++ (printArg l1)++ ", label " ++ (printArg l2)
+printTuple (Icmp how, res, a1, a2) = "     " ++
+    (printArg res) ++ " = icmp " ++ (ifToLLVM how) ++" "++"i32"++ " " ++ (printArg a1) ++ "," ++" " ++ (printArg a2)
+printTuple (IcmpTyped t how, res, a1, a2) = "     " ++
+    (printArg res) ++ " = icmp " ++ (ifToLLVM how) ++" "++(typeSize t) ++ " " ++ (printArg a1) ++ "," ++" " ++ (printArg a2)
+printTuple (CallFun t, res, name, args) =
+    if(ifVoid t) then
+        "     " ++ "call void "++ (printArg name) ++ "(" ++ (printArg args) ++ ")"
+    else
+        "     " ++ (printArg res) ++ " = " ++ "call " ++ (typeSize t) ++ " " ++
+            (printArg name) ++ "(" ++ (printArg args) ++ ")"
+printTuple (BitCast, res, ValInt (len), GlobalVar name) =
+    "     " ++ (printArg res) ++ " = " ++ "bitcast [" ++ (show len) ++ " x i8]* @" ++ (name) ++ " to i8*"
+printTuple x = show x
+
+ifVoid :: Type (Maybe (Int, Int)) -> Bool
+ifVoid (Void t) = True
+ifVoid _ = False
+
+ifToLLVM :: CmpOp -> String
+ifToLLVM LTHm  = "slt"
+ifToLLVM LEm  = "sle"
+ifToLLVM GTHm  = "sgt"
+ifToLLVM GEm  = "sge"
+ifToLLVM EQUm  = "eq"
+ifToLLVM NEm  = "ne"

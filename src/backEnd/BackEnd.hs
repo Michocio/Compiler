@@ -6,7 +6,6 @@ import Control.Monad.Writer.Lazy
 import Control.Monad.Reader
 import Control.Monad.State
 import Control.Applicative
-import Control.Monad.Except
 import qualified Data.Map as M
 import Data.Char
 import LexGrammar
@@ -23,6 +22,8 @@ import Data.List
 import Data.Maybe
 import System.Exit ( exitFailure, exitSuccess )
 import Data.Tuple
+import System.Environment
+import System.FilePath
 
 
 import Environment
@@ -30,93 +31,324 @@ import TypesStuff
 import Misc
 import IntermediateEnv
 
-{-
-data RegName = EAX | EBX | ECX | EDX | ESP | EBP | ESI | EDI
-    deriving (Eq, Ord, Show, Read)
-data RegAsm = Register Int --EAX | EBX | ECX | EDX | ESP | EBP | ESI | EDI
-    deriving (Eq, Ord, Show, Read)
-data Location = Stack Int | Memory Int | RegLoc RegAsm
-    deriving (Eq, Ord, Show, Read)
 
-data AsmOperand = RegOp RegName | MemOp Int | ValOp Int
+type Code = [String]
+type VarsTypes = M.Map Argument (Type (Maybe (Int, Int)))
+type FunsTypes = M.Map Ident (Type (Maybe (Int, Int)))
+type StringEnv = M.Map String Int
+type EnvBack = (Code, VarsTypes, FunsTypes, StringEnv)
 
-type RegMap = M.Map RegAsm [Argument]
-type AddrMap = M.Map Argument [Location]
-type Code = [AsmInstr]
-type StackPtr = Int
+targetData = "target datalayout = \"e-m:e-i64:64-f80:128-n8:16:32:64-S128\"\n"
+targetDef = "target triple = \"x86_64-unknown-linux-gnu\"\n"
 
-type EnvBack = (Code, RegMap, AddrMap, [RegAsm], StackPtr)
-initialEnvBack = ([], M.empty, M.empty, [], 0)
+initialEnvBack = ([targetData, targetDef], M.empty,
+     M.fromList [(Ident "printString", Void Nothing ),
+    (Ident "printInt", Void Nothing ),
+    (Ident "readInt", Int Nothing ),
+    (Ident "readString", Str Nothing ),
+    (Ident "error", Void Nothing ),
+    (Ident "concat", Str Nothing )  ],
+      M.empty)
 
-data AsmInstr =
-      Mov Int AsmOperand AsmOperand
-    | Sub AsmOperand AsmOperand
-    | Push AsmOperand
-    | Pop AsmOperand
-    | Add AsmOperand AsmOperand
-    | LabAsm String
+printIntDecl = "declare void @printInt(i32)"
+printStrDecl = "declare void @printString(i8*)"
+readIntDecl = "declare i32 @readInt()"
+readStrDecl = "declare i8* @readString()"
+concatDecl = "declare i8* @concat(i8*, i8*)"
+errorDecl = "declare void @error()\n\n"
+
+fundDelsCode = [printIntDecl, printStrDecl, readIntDecl, readStrDecl, concatDecl, errorDecl]
+
+writeToCode :: String ->  StateT EnvBack IO ()
+writeToCode instr = do
+    (code, vars, funs, strs) <- get
+    put(code ++ [instr ++ "\n"], vars, funs, strs)
+
+generateLLVM :: String -> [FunctionDef]  -> IO ()
+generateLLVM file p =  (liftIO $ evalStateT (backEnd file p) initialEnvBack)
+
+backEnd :: String -> [FunctionDef] -> StateT EnvBack IO ()
+backEnd file graph = do
+    mapM writeToCode fundDelsCode
+
+    mapM traverseFuns graph
 
 
-generateAsm :: [FunctionCode]  -> IO ()
-generateAsm p =  (liftIO $ evalStateT (backEnd p) initialEnvBack)
+    new_graph <- mapM changeCode graph
 
-backEnd :: [FunctionCode] -> StateT EnvBack IO ()
-backEnd graph = do
-    put([], M.fromList [(Register 0, []),(Register 1, []), (Register 2, [])],
-        M.empty, [Register 0, Register 1, Register 2], 0)
-    liftIO $ putStrLn "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
-    mapM (generateFun) graph
+    (code, vars, funs, strs) <- get
+    strings <- return $ map swap (M.toList strs)
+    mapping <- return $ map (\(nr, str) -> ("@.str." ++ (show nr) ++
+         " = private constant [" ++ (show $ (length str) +1) ++ " x i8] c\"" ++ str ++ "\\00\"" )) strings
+    mapM writeToCode mapping
+
+    mapM (emitFunction) new_graph
+
+    (code, _, _, _) <- get
+    liftIO $ writeFile ((dropExtension file) ++ ".ll") (foldr (++) "" code)
     return ()
 
-generateFun :: FunctionCode -> StateT EnvBack IO ()
-generateFun ((Ident name), start_block, blocks, size) = do
-    putInstr(LabAsm name)
-    (Just (first_block, _)) <- return $ M.lookup start_block blocks
-    args <- return $ mapArgs 0 first_block
-    liftIO $ putStrLn name
-    liftIO $ putStrLn $ show size
-    putInstr(Push (RegOp EBP))
-    putInstr(Mov 32 (RegOp ESP) (RegOp EBP))
-    putInstr(Sub (ValOp size) (RegOp ESP))
+extractStrings :: Tuple -> StateT EnvBack IO ()
+extractStrings (TEXT, s, _, _) =  do
+    ifString s
+    return ()
+extractStrings (op, arg1, arg2, arg3) =  do
+    ifString arg1
+    ifString arg2
+    ifString arg3
     return ()
 
-putInstr :: AsmInstr -> StateT EnvBack IO ()
-putInstr instr = do
-    (code, regs, addres, free, ptr) <- get
-    put(code++[instr], regs, addres, free, ptr)
+ifString :: Argument -> StateT EnvBack IO ()
+ifString (ValStr str) = do
+    (code, vars, funs, strs) <- get
+    num <- return $ M.size strs
+    put(code, vars, funs, M.insert str num strs)
+ifString _ = return ()
 
-findEmptyReg :: StateT EnvBack IO (Maybe RegAsm)
-findEmptyReg = do
-    (code, regs, addres, free, ptr) <- get
-    if(length free > 0) then do
-        put(code, regs, addres, tail free, ptr)
-        return $ Just (head free)
-    else return (Nothing)
+changeCode :: FunctionDef -> StateT EnvBack IO (FunctionDef)
+changeCode (ident@(Ident name), type_, params, order, code_) = do
+    (code, vars, funs, strs) <- get
+    put(code, M.empty, funs, strs)
+    codes <- return $ map fst (map snd (M.toList code_))
+    mapM traverseAllocs codes
+    mapM traverseAllocs codes
+    new_blocks <- mapM (upgradeCode code_ type_) $ zip [0..M.size code_] (map snd (M.toList code_))
+    new_code <- return $ M.fromList (zip (map fst (M.toList code_)) new_blocks)
+    return (ident, type_, params, order, new_code)
 
-freeRegister :: StateT EnvBack IO (RegAsm)
-freeRegister = do
-    (code, regs, addres, free, ptr) <- get
-    --putInstr (Push $ RegLoc (Register 0))
-    return $ (Register 0)
+removePhis :: M.Map Int Vertex -> Int  -> ([Tuple],[Tuple]) -> StateT EnvBack IO ([Tuple])
+removePhis graph _ ([], new_code) = return new_code
+removePhis graph me (((Phi, res, SSA phis, NIL):xs), new_code) = do
+    bs <- return $ map (\(From b x) -> b) phis
+    ans <- mapM (checkIfJump me graph) bs
+    new_phis <- return $ removeIndecies ans 0 (phis, [])
+    removePhis graph me ((xs), new_code ++ [(Phi, res, SSA new_phis, NIL)])
+removePhis graph me ((x:xs), new_code) =
+    removePhis graph me ((xs), new_code ++ [x])
 
-getReg :: Tuple -> StateT EnvBack IO Location
-getReg (op, x, y, z) = do
-    emptyReg <- findEmptyReg
-    case(emptyReg) of
-        (Just reg) -> return $ RegLoc reg
-        Nothing -> do
-            return $ Stack 0
+removeIndecies :: [Bool] -> Int -> ([a],[a]) -> [a]
+removeIndecies to_del index ([], old) = old
+removeIndecies to_del index ((x:xs), old) =
+    if(((!!) to_del index )== False) then
+        removeIndecies to_del (index +1) (xs, old)
+    else
+        removeIndecies to_del (index + 1) (xs, old ++ [x])
 
-mapArgs :: Int -> [Tuple] -> Int
-mapArgs x [] = x
-mapArgs x ((ARGS, NIL, NIL, NIL):xs) = x
-mapArgs x ((Alloca t, param, NIL, NIL):xs) =
-    mapArgs (x+ (typeSize t)) xs
-mapArgs s (x:xs) = mapArgs (s+1) xs
+checkIfJump :: Int -> M.Map Int Vertex -> Int -> StateT EnvBack IO (Bool)
+checkIfJump me graph node = do
+    (code, n) <- return $ fromJust $ M.lookup node graph
+    case (last code) of
+        (Br, _, Label _ l1, Label _ l2) -> do
+            if(l1 == me || l2 == me) then return True
+            else return False
+        (GotoOp, Label _ l, _, _) -> do
+            if(l == me) then return True
+            else return False
+        otherwise -> return False
 
-pushStack :: Type (Maybe (Int, Int)) -> StateT EnvBack IO (Int)
-pushStack t = do
-    (code, regs, addres, free, ptr) <- get
-    put(code, regs, addres, free, ptr - (typeSize t))
-    return $ ptr - (typeSize t)
--}
+
+upgradeCode ::  M.Map Int Vertex ->  (Type (Maybe(Int, Int))) -> (Int, Vertex) -> StateT EnvBack IO (Vertex)
+upgradeCode g t (me, (block, n)) = do
+    ok <- changeBlock me g t block
+    return $ (ok, n)
+
+changeBlock ::  Int -> M.Map Int Vertex -> (Type (Maybe(Int, Int))) -> [Tuple] -> StateT EnvBack IO ([Tuple])
+changeBlock  me g t code = do
+    first_code <- removePhis g me (code, [])
+    new_code <- changeCalls t (first_code, []) []
+    fin_code <- changeCalls t (new_code, []) []
+    mapM extractStrings fin_code
+    final <- mapM (changeCast) fin_code
+    removed <- return $ map (removeDummyTuple) final
+    cleared <- return $ map ((fromJust)) (filter (isJust) removed)
+    return cleared
+
+changeCast :: Tuple -> StateT EnvBack IO Tuple
+changeCast (BitCast, res, len, GlobalVar s) = do
+    (code, vars, funs, str) <- get
+    (Just x) <- return $ M.lookup s str
+    return (BitCast, res, len, GlobalVar $ ".str." ++ (show x))
+changeCast z = return z
+
+traverseFuns :: FunctionDef -> StateT EnvBack IO ()
+traverseFuns (ident@(Ident name), type_, params, order, code_) = do
+    (code, vars, funs, str) <- get
+    codes <- return $ map fst (map snd (M.toList code_))
+    put(code, vars, M.insert ident type_ funs, str)
+    --mapM traverseAllocs codes
+    return ()
+
+staticType :: Argument -> StateT EnvBack IO (Type (Maybe(Int, Int)))
+staticType v@(Reg nr) = do
+    (code, vars, funs, str) <- get
+    case (M.lookup v vars) of
+        (Just x) -> return x
+        otherwise -> return $ Int Nothing
+staticType v@(Var name nr _ _) = do
+    (code, vars, funs, str) <- get
+    case (M.lookup v vars) of
+        (Just x) -> return x
+        otherwise -> return $ Int Nothing
+staticType (ValInt _) = return $ Int Nothing
+staticType (ValBool _) = return $ Bool Nothing
+staticType (ValStr _) = return $ Str Nothing
+
+changeCalls :: (Type (Maybe(Int, Int))) -> ([Tuple], [Tuple]) -> [(Type (Maybe(Int, Int)), Argument)] -> StateT EnvBack IO ([Tuple])
+changeCalls t ([], new_code) _ = return new_code
+changeCalls t ((instr@(AddOp, res, arg1, arg2):xs),new_code) params = do
+    liftIO $ putStrLn $ show arg1
+    liftIO $ putStrLn "oooooo"
+    (code, vars, funs, str) <- get
+    --liftIO $ putStrLn $ show vars
+    if(ifVar arg1) then do
+        if(not $ isJust $ M.lookup arg1 vars ) then
+            changeCalls t (xs, new_code ++ [instr]) []
+        else do
+            (Just type_) <- return $ M.lookup arg1 vars
+            put(code, M.insert res type_ vars, funs, str)
+            if(type_ == (Str Nothing)) then do
+                new_instr <- return $ (CONCAT, res, arg1, arg2)
+                changeCalls t (xs, new_code ++ [new_instr]) []
+            else do
+                new_instr <- return $ (AddOp, res, arg1, arg2)
+                changeCalls t (xs, new_code ++ [new_instr]) []
+    else do
+        case (arg1) of
+            (Reg nr) -> do
+                if(not $ isJust $ M.lookup arg1 vars ) then
+                    changeCalls t (xs, new_code ++ [instr]) []
+                else do
+                    (Just type_) <- return $ M.lookup arg1 vars
+                    put(code, M.insert res type_ vars, funs, str)
+                    if(type_ == (Str Nothing)) then do
+                        new_instr <- return $ (CONCAT, res, arg1, arg2)
+                        changeCalls t (xs, new_code ++ [new_instr]) []
+                    else do
+                        new_instr <- return $ (AddOp, res, arg1, arg2)
+                        changeCalls t (xs, new_code ++ [new_instr]) []
+            otherwise -> do
+                (type_) <- return $ typeLLVM arg1
+                put(code, M.insert res type_ vars, funs, str)
+                if(type_ == (Str Nothing)) then do
+                    new_instr <- return $ (CONCAT, res, arg1, arg2)
+                    changeCalls t (xs, new_code ++ [new_instr]) []
+                else do
+                    new_instr <- return $ (AddOp, res, arg1, arg2)
+                    changeCalls t (xs, new_code ++ [new_instr]) []
+changeCalls t (((ParamOp, arg, NIL, NIL):xs),new_code) params = do
+    res <- staticType arg
+    changeCalls t (xs, new_code) (params ++ [(res, arg)])
+changeCalls t ((instr@(CallOp, (Fun name), res, NIL):xs),new_code) params = do
+    (code, vars, funs, str) <- get
+    (Just type_) <- return $ M.lookup (Ident name) funs
+    new_instr <- return $ (CallFun type_, res, Fun name, Args params)
+    put(code, M.insert res type_ vars, funs, str)
+    changeCalls t (xs, new_code ++ [new_instr]) []
+changeCalls t ((instr@(Icmp how, res, arg1, arg2):xs),new_code) params = do
+    (code, vars, funs, str) <- get
+    if(ifVar arg1) then do
+        if(not $ isJust $ M.lookup arg1 vars ) then
+            changeCalls t (xs, new_code ++ [instr]) []
+        else do
+            (Just type_) <- return $ M.lookup arg1 vars
+            new_instr <- return $ (IcmpTyped type_ how, res, arg1, arg2)
+            changeCalls t (xs, new_code ++ [new_instr]) []
+    else do
+        case (arg1) of
+            (Reg nr) -> do
+                if(not $ isJust $ M.lookup arg1 vars ) then
+                    changeCalls t (xs, new_code ++ [instr]) []
+                else do
+                    (Just type_) <- return $ M.lookup arg1 vars
+                    new_instr <- return $ (IcmpTyped type_ how, res, arg1, arg2)
+                    changeCalls t (xs, new_code ++ [new_instr]) []
+            otherwise -> do
+                (type_) <- return $ typeLLVM arg1
+                new_instr <- return $ (IcmpTyped type_ how, res, arg1, arg2)
+                changeCalls t (xs, new_code ++ [new_instr]) []
+changeCalls t ((instr@(Phi, res, SSA phis, NIL):xs), new_code) params = do
+    (code, vars, funs, str) <- get
+    if(not $ isJust $ M.lookup res vars ) then
+        changeCalls t (xs, new_code ++ [instr]) []
+    else do
+        (Just type_) <- return $ M.lookup res vars
+        new_instr <- return $ (PhiTyped type_, res, SSA phis, NIL)
+        changeCalls t (xs, new_code ++ [new_instr]) []
+changeCalls t (((RetOp, a, NIL, NIL):xs), new_code) params =
+    return $ new_code ++ [(RetOpTyped t, a, NIL, NIL)]
+changeCalls t ((x:xs),new_code) params = do
+    changeCalls t (xs, new_code ++ [x]) (params)
+
+traverseAllocs :: [Tuple] -> StateT EnvBack IO ()
+traverseAllocs [] = return ()
+traverseAllocs ((Alloca t, var, NIL, NIL):xs) = do
+    (code, vars, funs, str) <- get
+    put(code, M.insert var t vars, funs, str)
+    traverseAllocs xs
+traverseAllocs ((op@AddOp, res, a1, a2):xs) = do
+    (code, vars, funs, str) <- get
+    --put(code, M.insert res (Int Nothing) vars, funs, str)
+    traverseAllocs xs
+traverseAllocs ((op@SubOp, res, a1, a2):xs) = do
+    (code, vars, funs, str) <- get
+    put(code, M.insert res (Int Nothing) vars, funs, str)
+    traverseAllocs xs
+traverseAllocs ((op@MulOp, res, a1, a2):xs) = do
+    (code, vars, funs, str) <- get
+    put(code, M.insert res (Int Nothing) vars, funs, str)
+    traverseAllocs xs
+traverseAllocs ((op@ModOp, res, a1, a2):xs) = do
+    (code, vars, funs, str) <- get
+    put(code, M.insert res (Int Nothing) vars, funs, str)
+    traverseAllocs xs
+traverseAllocs ((op@DivOp, res, a1, a2):xs) = do
+    (code, vars, funs, str) <- get
+    put(code, M.insert res (Int Nothing) vars, funs, str)
+    traverseAllocs xs
+traverseAllocs ((BitCast, res, len, GlobalVar s):xs) = do
+    (code, vars, funs, str) <- get
+    put(code, M.insert res (Str Nothing) vars, funs, str)
+    traverseAllocs xs
+traverseAllocs ((Phi, var, SSA a, b):xs) = do
+    (code, vars, funs, str) <- get
+    (From _ val) <- return $ head a
+    if(ifVar val) then do
+        if(not $ isJust $ M.lookup val vars) then return ()
+        else do
+            (Just type_) <- return $ M.lookup val vars
+            put(code, M.insert var type_ vars, funs, str)
+            return ()
+    else do
+        case (val) of
+            (Reg nr) -> do
+                if(not $ isJust $ M.lookup val vars) then return ()
+                else do
+                    (Just type_) <- return $ M.lookup val vars
+                    put(code, M.insert var type_ vars, funs, str)
+            otherwise -> do
+                (type_) <- return $ typeLLVM val
+                put(code, M.insert var type_ vars, funs, str)
+        return ()
+    traverseAllocs xs
+traverseAllocs (x:xs) = traverseAllocs xs
+
+emitFunction :: FunctionDef -> StateT EnvBack IO ()
+emitFunction ((Ident name), type_, params, order, code) = do
+    writeToCode $ "define "
+        ++ (typeSize type_) ++ " @" ++ name ++ "(" ++  (intercalate ", " $ map llvmArg params) ++")"
+    writeToCode "{"
+    llvmCode order code
+    writeToCode "}"
+
+llvmCode :: [Int] -> M.Map Int Vertex -> StateT EnvBack IO ()
+llvmCode [] graph = return ()
+llvmCode (nr:xs) graph = do
+    (Just (block, _)) <- return $ M.lookup nr graph
+    if(length block == 0) then return ()
+    else do
+        writeToCode $ "l" ++ (show nr) ++ ":"
+        mapM (writeToCode . printTuple) block
+        llvmCode xs graph
+
+llvmArg :: (Type (Maybe (Int, Int)), Ident) -> String
+llvmArg (t, (Ident name)) = (typeSize t) ++ " %" ++ name ++ "_0_0_0"

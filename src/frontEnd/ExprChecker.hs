@@ -5,7 +5,7 @@ import Control.Monad.Writer.Lazy
 import Control.Monad.Reader
 import Control.Monad.State
 import Control.Applicative
-import Control.Monad.Except
+
 import qualified Data.Map as M
 import Data.Char
 import LexGrammar
@@ -31,6 +31,8 @@ exprType exp = case exp of
     EVar a lvalue -> do
         vars <- getVars
         (arr, name) <- return (identLValue lvalue)
+        liftIO $ putStrLn "OKKK"
+        liftIO $ putStrLn $ show vars
         case (M.lookup name vars) of
             (Just x) -> do
                 if(arr && (isArray x == False)) then notArray (getTypeInfo x) name

@@ -6,7 +6,6 @@ import Control.Monad.Writer.Lazy
 import Control.Monad.Reader
 import Control.Monad.State
 import Control.Applicative
-import Control.Monad.Except
 import qualified Data.Map as M
 import Data.Char
 import LexGrammar
@@ -37,15 +36,15 @@ type SimpleBlocks = M.Map Argument [Tuple]
 type ControlFlow = (Argument, [Argument])
 
 
-generateIntermediate :: ProgramD -> IO ([FunctionCode])
+generateIntermediate :: ProgramD -> IO ([FunctionDef])
 generateIntermediate p =  (liftIO $ evalStateT (genProgram p) initialEnvMid)
 
 
-genProgram :: ProgramD -> StateT EnvMid IO ([FunctionCode])
+genProgram :: ProgramD -> StateT EnvMid IO ([FunctionDef])
 genProgram (Program info []) = return []
 genProgram  (Program info (x:xs)) = genTopDef [] (x:xs)
 
-genTopDef :: ([FunctionCode]) -> [TopDefD] -> StateT EnvMid  IO ([FunctionCode])
+genTopDef :: ([FunctionDef]) -> [TopDefD] -> StateT EnvMid  IO ([FunctionDef])
 genTopDef code [] = return code
 genTopDef code (x:xs) = do
     fun <- genTopInstr x
@@ -63,23 +62,24 @@ returnJump _ old [] = old
 --returnJump x old ((RetOp, _, _, _):xs) = returnJump (x+1) (x:old) xs
 returnJump y old (x:xs) = returnJump (y+1) old xs
 
-genTopInstr :: TopDefD -> StateT EnvMid IO (FunctionCode)
+genTopInstr :: TopDefD -> StateT EnvMid IO (FunctionDef)
 genTopInstr fun@(FnDef a type_ ident@(Ident name) args block@(Block t code)) = do
     put initialEnvMid
     lEntry <- genLabel "entry"
     emit(START, NIL, NIL, NIL)
     params <- return $ map (\(Arg _ t n) ->(t,n)) args
-    (params, size, edited) <- return $ addArguments 0 (reverse params) code
-    --blocks <- return $ (Block t edited)
+    edited <- return $ addArguments (params) code
+    if(length code == 0) then
+        emit(RetOp, NIL, NIL, NIL)
+    else return ()
     mapM genStmt edited
-    liftIO $ putStrLn $ "##########" ++ (show name) ++ ": "
-    (v, i) <- printCode
-    return (ident, i, v, size, params)
+    (order, code) <- printCode
+    return (ident, type_, params, order, code)
 
-addArguments :: Int -> [(TypeD, Ident)] -> [Stmt (Maybe (Int, Int))] -> (Int, [Stmt (Maybe (Int, Int))])
-addArguments a [] x = (a,x)
-addArguments a ((t,ident):xs) block =
-    addArguments (a + typeSize t) xs ((Decl Nothing t [(NoInit Nothing ident)]):block)
+addArguments :: [(TypeD, Ident)] -> [Stmt (Maybe (Int, Int))] -> ([Stmt (Maybe (Int, Int))])
+addArguments [] x = x
+addArguments ((t,ident):xs) block =
+    addArguments xs ((Decl Nothing t [(NoInit Nothing ident)]):block)
 
 removeDeadCode :: [Tuple] -> [Tuple]
 removeDeadCode code =
@@ -94,7 +94,7 @@ reorderBlocks final ((_, nr):orginal) curr =
     if(nr `elem` final) then reorderBlocks final orginal (curr ++ [nr])
     else reorderBlocks final orginal curr
 
-printCode :: StateT EnvMid IO (M.Map Int Vertex, Int)
+printCode :: StateT EnvMid IO ([Int], M.Map Int Vertex)
 printCode = do
     emit(EmptyOp, NIL, NIL, NIL)
     --putEntryLabel
@@ -108,7 +108,7 @@ printCode = do
     labels_orginal <- return $ reorderBlocks labels_ordered sortedLabels []
     nums <- return [0.. (length labels_ordered)]
     labels_mapped <- return $ M.fromList $ zip (sort labels_orginal) nums
-    liftIO $ putStrLn $ show labels_mapped
+    --liftIO $ putStrLn $ show labels_mapped
     enumed <- mapM enumVars (M.toList blocks)
 
     neighbors <- return $ map snd (M.toList graph)
@@ -121,28 +121,54 @@ printCode = do
     (graph, _, _)<- return $ runIdentity $ execStateT (blockDfs 0 0) (tree, M.empty,M.empty)
     (_, codes, _, phis, _) <- return $ unzip5 $ map snd (M.toList graph)
     packed <-return $ zip3 labels_ordered (map M.toList phis) codes
+    --liftIO $ putStrLn $ show graph
 
     cor <- mapM createPhis packed
 
+    showBlocks labels_orginal labels_mapped  cor
     edited <- doOpt cor
     (a,b) <- aliveVar ([],[]) (foldr (++) [] edited)
     k <- return $ map (map (removeDeadUsage b)) edited
     z <- return $ map ((filter isJust)) k
     zz <- return $ map (map fromJust) z
-    liftIO $ putStrLn "KOD OK: "
-    liftIO $ putStrLn $ show zz
+    --liftIO $ putStrLn "KOD OK: "
+    --liftIO $ putStrLn $ show zz
+    --showBlocks labels_orginal labels_mapped zz
+    --removed <- return $ map (map removeDummyTuple) zz
+    --cleared <- return $ map (map (fromJust)) (map (filter (isJust)) removed)
     showBlocks labels_orginal labels_mapped zz
-    final_code <- return $ M.fromList $ zip labels_ordered (zip zz neighbors)
-    return (final_code, 0)
+    conds <- mapM (replaceIf []) zz
+    alwaysBr <- mapM (addJumps) (zip conds neighbors)
+    --liftIO $ putStrLn "RRRRRRRRRRRRRRRRRRRR"
+    --liftIO $ mapM (mapM (print. printTuple))  alwaysBr
+    final_code <- return $ M.fromList $ zip labels_ordered (zip alwaysBr neighbors)
+    return (labels_orginal, final_code)
 
+addJumps :: ([Tuple],[Argument]) -> StateT EnvMid IO [Tuple]
+addJumps ([],neighbors) = do
+    if(length neighbors == 0) then return []
+    else do
+        new_instr <- return (GotoOp, (head neighbors), NIL, NIL)
+        return [new_instr]
+addJumps (code, neighbors) = do
+    case (last code) of
+        (GotoOp, lab, NIL, NIL) -> return code
+        (Br, t, l1, l2) -> do
+            if(length neighbors == 0) then return code
+            else do
+                if((head neighbors) == l1) then do
+                    new_instr <- return (Br, t, l1, (last neighbors))
+                    return $ (init code) ++ [new_instr]
+                else do
+                    new_instr <- return (Br, t, l1, (head neighbors))
+                    return $ (init code) ++ [new_instr]
+        otherwise -> do
+            if(length neighbors == 0) then return code
+            else do
+                new_instr <- return (GotoOp,(head neighbors), NIL, NIL)
+                --return $ (init code) ++ [new_instr]
+                return $ (code) ++ [new_instr]
 
-showBlocks :: [Int] -> M.Map Int Int -> [[Tuple]] -> StateT EnvMid IO ()
-showBlocks [] _ _ = return ()
-showBlocks (x:xs) map_ code = do
-    (Just nr) <- return $ M.lookup x map_
-    liftIO $ putStrLn $ "LABEL   " ++ (show x) ++ ": "
-    liftIO $ mapM (print. printTuple) ((!!) code nr)
-    showBlocks xs map_ code
 
 
 newPhi :: Int -> ((String, Int), [Argument]) ->  StateT EnvMid IO Tuple
@@ -193,6 +219,10 @@ nameVar nr (RetOp ,res, NIL, NIL) = do
 nameVar nr (ParamOp ,res, NIL, NIL) = do
     res_ <- countVars nr res
     return (ParamOp ,res_, NIL, NIL)
+--nameVar nr (CallFun, res, name ,Args params) = do
+--    res_ <- countVars nr res
+--    args <- mapM (countVars nr) params
+--    return (CallFun, res_, name ,Args args)
 nameVar nr (op, res, a1, a2) = do
     arg1 <- countVars nr a1
     arg2 <- countVars nr a2
@@ -266,17 +296,19 @@ extendPhis from node (name, nr) = do
     (graph, vars,decls) <- get
     (Just (neighbors, code, visited, phis, allocs))<- return $ M.lookup node graph
     (Just val) <- return $ M.lookup (name, nr) vars
-    case (M.lookup (name, nr) phis) of
-        Nothing -> do
-            phi_new <- return $ M.insert (name, nr) [(From from val)] phis
-            updated <- return (neighbors, code, True, phi_new, allocs)
-            put(M.insert node updated graph, M.insert (name, nr) (Var name nr 0 node) vars, decls)
-            return ()
-        (Just x) -> do
-            phi_new <- return $ M.insert (name, nr) ((From from val):x) phis
-            updated <- return (neighbors, code, True, phi_new, allocs)
-            put(M.insert node updated graph, M.insert (name, nr) (Var name nr 0 node) vars, decls)
-            return ()
+    if(isJust $ M.lookup (name, nr) allocs) then return ()
+    else do
+        case (M.lookup (name, nr) phis) of
+            Nothing -> do
+                phi_new <- return $ M.insert (name, nr) [(From from val)] phis
+                updated <- return (neighbors, code, True, phi_new, allocs)
+                put(M.insert node updated graph, M.insert (name, nr) (Var name nr 0 node) vars, decls)
+                return ()
+            (Just x) -> do
+                phi_new <- return $ M.insert (name, nr) ((From from val):x) phis
+                updated <- return (neighbors, code, True, phi_new, allocs)
+                put(M.insert node updated graph, M.insert (name, nr) (Var name nr 0 node) vars, decls)
+                return ()
 
 
 analyzeTuple :: Int -> Int -> Tuple -> State FinEnv ()
@@ -486,17 +518,20 @@ genStmt ::Stmt (Maybe(Int, Int)) -> StateT EnvMid IO ()
 genStmt (Decl _ type_ items_) = do
     x <- mapM (genItem type_) items_
     return ()
-genStmt  (BStmt x (Block a stmts)) = do
-    if(x/=Nothing) then do
+genStmt  to@(BStmt jak (Block a stmts)) = do
+    if(jak /= Nothing) then do
         lBlock <- genLabel "l"
         return ()
     else return ()
     (vars, decls, temps, labs, code, labels, curr) <- get
-    put(vars, decls, temps, labs, code, labels, curr)
+    --put(vars, decls, temps, labs, code, labels, curr)
     mapM genStmt stmts
     (vars_, _, temps_, labs_, code_, labels_, _) <- get
     put(vars_, decls, temps_, labs_, code_, labels_, curr)
-    if(x/=Nothing) then do
+    if(jak /= Nothing) then do
+        liftIO $ putStrLn "PINODZDD IONIOFDFD INOFD"
+        liftIO $ putStrLn $ show stmts
+        liftIO $ putStrLn $ show to
         lEnd <- genLabel "l"
         return ()
     else return ()
@@ -541,26 +576,34 @@ genStmt  (Cond info cond ifBlock) = do
     case (cond) of
         (ELitTrue a) -> do
             lTrue_ <- genLabel "l"
-            genStmt (BStmt Nothing $ Block Nothing [ifBlock])
+            case (ifBlock) of
+                (BStmt _ (Block _ code)) -> genStmt (BStmt Nothing $ Block Nothing code)
+                otherwise ->  genStmt (BStmt Nothing $ Block Nothing [ifBlock])
         (ELitFalse a) -> return ()
         otherwise -> do
-            lTrue_ <- reserveLabel "lt"
-            lTrue <- return $ Label  "lt" lTrue_
-            lEnd_ <- reserveLabel "le"
-            lEnd <- return $ Label  "le" lEnd_
+            lTrue_ <- reserveLabel "l"
+            lTrue <- return $ Label  "l" lTrue_
+            lEnd_ <- reserveLabel "l"
+            lEnd <- return $ Label  "l" lEnd_
             genCond cond lTrue lEnd lTrue
             updateLabel lTrue_
-            genStmt (BStmt Nothing $ Block Nothing [ifBlock])
+            case (ifBlock) of
+                (BStmt _ (Block _ code)) -> genStmt (BStmt Nothing $ Block Nothing code)
+                otherwise ->  genStmt (BStmt Nothing $ Block Nothing [ifBlock])
             --emit(GotoOp, lEnd, NIL, NIL)
             updateLabel lEnd_
 genStmt (CondElse info cond ifBlock elseBlock) = do
     case (cond) of
         (ELitTrue a) -> do
             lTrue_ <- genLabel "l"
-            genStmt (BStmt Nothing $ Block Nothing [ifBlock])
+            case (ifBlock) of
+                (BStmt _ (Block _ code)) -> genStmt (BStmt Nothing $ Block Nothing code)
+                otherwise ->  genStmt (BStmt Nothing $ Block Nothing [ifBlock])
         (ELitFalse a) -> do
             lFalse_ <-  genLabel "l"
-            genStmt (BStmt Nothing $ Block Nothing [elseBlock])
+            case (elseBlock) of
+                (BStmt _ (Block _ code)) -> genStmt (BStmt Nothing $ Block Nothing code)
+                otherwise ->  genStmt (BStmt Nothing $ Block Nothing [elseBlock])
         otherwise -> do
             lTrue_ <- reserveLabel "l"
             lTrue <- return $ Label  "l" lTrue_
@@ -570,10 +613,14 @@ genStmt (CondElse info cond ifBlock elseBlock) = do
             lEnd <- return $ Label  "l" lEnd_
             genCond cond lTrue lFalse lTrue
             updateLabel lTrue_
-            genStmt (BStmt Nothing $ Block Nothing [ifBlock])
+            case (ifBlock) of
+                (BStmt _ (Block _ code)) -> genStmt (BStmt Nothing $ Block Nothing code)
+                otherwise ->  genStmt (BStmt Nothing $ Block Nothing [ifBlock])
             emit(GotoOp, lEnd, NIL, NIL)
             updateLabel lFalse_
-            genStmt (BStmt Nothing $ Block Nothing [elseBlock])
+            case (elseBlock) of
+                (BStmt _ (Block _ code)) -> genStmt (BStmt Nothing $ Block Nothing code)
+                otherwise ->  genStmt (BStmt Nothing $ Block Nothing [elseBlock])
             updateLabel lEnd_
 genStmt (While a expr stmt) = do
     case (expr) of
@@ -676,20 +723,34 @@ genExpr exp = case exp of
         --ENew a type_ -> ENew (f a) (fmap f type_)
         --ENewArr a type_ expr -> ENewArr (f a) (fmap f type_) (fmap f expr)
         --ENullCast a type_ -> ENullCast (f a) (fmap f type_)
-        EString a string -> return $ ValStr string
+        EString a string -> do
+            t <- freshTemp
+            len <- return $ length string
+
+            if(len > 0) then do
+                emit(TEXT, ValStr (init $ tail string), NIL, NIL)
+                emit(BitCast, t, ValInt ((toInteger len) - 1), GlobalVar $ (init $ tail string))
+            else do
+                emit(TEXT, ValStr "", NIL, NIL)
+                emit(BitCast, t, ValInt (1), GlobalVar "")
+            return t
         ELitInt a integer -> return $ ValInt integer
         ELitTrue a -> return $ ValBool True
         ELitFalse a -> return $ ValBool False
         Neg a expr -> do
             e <- genExpr expr
             t <- freshTemp
-            emit (NegOp, t, e, NIL)
+            emit (NegOp, t, e, ValInt (-1))
             return t
         Not a expr -> do
             e <- genExpr expr
-            t <- freshTemp
-            emit (NotOp, t, e, NIL)
-            return t
+            case (e) of
+                (ValBool True) -> return $ ValBool False
+                (ValBool False) -> return $ ValBool True
+                otherwise -> do
+                    t <- freshTemp
+                    emit (NotOp, t, e, ValBool True)
+                    return t
         EMul a expr1 mulop expr2 -> do
             e1 <- genExpr expr1
             e2 <- genExpr expr2
@@ -711,6 +772,7 @@ genExpr exp = case exp of
             e1 <- genExpr expr1
             e2 <- genExpr expr2
             lTrue <- reserveLabel "l"
+            lFin <- reserveLabel "l"
             case (relop) of
                 LTH x -> emit(IfOp LTHm, e1, e2, Label "l" lTrue)
                 LE a -> emit(IfOp LEm, e1, e2,  Label "l" lTrue)
@@ -721,9 +783,11 @@ genExpr exp = case exp of
             lFalse <- genLabel "l"
             t1 <- freshTemp
             emit(AssOp, t1, ValBool False, NIL)
+            emit(GotoOp, Label "l" lFin, NIL, NIL)
             updateLabel lTrue
             t2 <- freshTemp
             emit(AssOp, t2, ValBool True,NIL)
+            updateLabel lFin
             t <- freshTemp
             emit(Phi, t, SSA [(From lFalse t1), (From lTrue t2)], NIL)
             return t
@@ -745,17 +809,17 @@ genExpr exp = case exp of
             emit(AssOp, t2, ValBool False, NIL)
             updateLabel lEnd
             t <- freshTemp
-            emit(Phi, t, SSA [(From lFalse t1), (From lTrue t2)], NIL)
+            emit(Phi, t, SSA [(From lTrue t1), (From lFalse t2)], NIL)
             return t
         EOr a expr1 expr2 -> do
             e1 <- genExpr expr1
             lTrue <- reserveLabel "l"
             lEnd <- reserveLabel "l"
-            emit(IfOp NEm, e1, ValBool True, Label "l" lTrue)
+            emit(IfOp EQUm, e1, ValBool True, Label "l" lTrue)
             lSec <- genLabel "l"
             e2 <- genExpr expr2
-            emit(IfOp NEm, e2, ValBool True, Label "l"  lTrue)
-            lOk <- genLabel "l"
+            emit(IfOp EQUm, e2, ValBool True, Label "l"  lTrue)
+            lFalse <- genLabel "l"
             t1 <- freshTemp
             emit(AssOp, t1, ValBool False, NIL)
             emit(GotoOp, Label "l" lEnd, NIL, NIL)
@@ -764,21 +828,20 @@ genExpr exp = case exp of
             emit(AssOp, t2, ValBool True ,NIL)
             updateLabel lEnd
             t <- freshTemp
-            emit(Phi, t, SSA [(From lOk t1), (From lTrue t2)], NIL)
+            emit(Phi, t, SSA [(From lFalse t1), (From lTrue t2)], NIL)
             return t
         EApp a (Ident name) exprs -> do
               e <- mapM genExpr exprs
-              mapM emitArg e
+              params <- mapM emitArg e
               t <- freshTemp
+              --emit(CallFun, t, Fun name, Args params)
               emit(CallOp, Fun name, t, NIL)
               return t
         --EClApp a ident1 ident2 exprs -> EClApp (f a) ident1 ident2 (map (fmap f) exprs)
     --    EArrLen a ident -> EArrLen (f a) ident
-    --    ERel a expr1 relop expr2 -> ERel (f a) (fmap f expr1) (fmap f relop) (fmap f expr2)
 
 
-
-emitArg :: Argument -> StateT EnvMid IO ()
+emitArg :: Argument -> StateT EnvMid IO (Argument)
 emitArg arg = do
     emit(ParamOp, arg, NIL, NIL)
-    return ()
+    return (arg)

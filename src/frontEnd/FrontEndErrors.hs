@@ -5,7 +5,6 @@ import Control.Monad.Writer.Lazy
 import Control.Monad.Reader
 import Control.Monad.State
 import Control.Applicative
-import Control.Monad.Except
 import qualified Data.Map as M
 import Data.Char
 import LexGrammar
@@ -48,8 +47,8 @@ classFieldDupErr info1 info2 ident = do
     liftIO $ exitFailure
 
 varUndeclared :: Debug -> Ident -> StateT Env IO (TypeD)
-varUndeclared debug name = do
-    liftIO $ putStrLn $ (show $ fromJust debug) ++ ": variable " ++ (show name) ++" doesn't exists"
+varUndeclared debug (Ident name) = do
+    liftIO $ putStrLn $ (show $ fromJust debug) ++ ": variable " ++ (name) ++" doesn't exists"
     liftIO exitFailure
 
 operatorErr :: Bool -> TypeD -> Debug -> StateT Env IO (TypeD)
@@ -97,20 +96,20 @@ typesOfArgsErr info name = do
     liftIO exitFailure
 
 notArray :: (Int, Int) -> Ident -> StateT Env IO (TypeD)
-notArray info name = do
-    liftIO $ putStrLn $ (show  info) ++ ": not an array " ++ show name
+notArray info (Ident name) = do
+    liftIO $ putStrLn $ (show info) ++ ": not an array " ++ name
     liftIO exitFailure
 
 nonVoidRetErr :: Maybe (Int, Int) ->String -> TypeD -> TypeD ->  StateT Env IO (Bool)
 nonVoidRetErr info name desiredType a = do
     liftIO $ putStrLn $ (show $ fromJust info) ++ ": wrong return type in function " ++
-        name ++ ", expected " ++ (show (getType desiredType)) ++ " but given " ++
-        (show (getType a))
+        name ++ ", expected " ++ (printType (getType desiredType)) ++ " but given " ++
+        (printType (getType a))
     liftIO exitFailure
 
 noRetErr :: Debug -> Ident -> StateT Env IO ()
-noRetErr info name = do
-    liftIO $ putStrLn $ (show info) ++ ": Non void function " ++ (show name) ++ " may not return any value."
+noRetErr info (Ident name) = do
+    liftIO $ putStrLn $ (show info) ++ ": Non void function " ++ (name) ++ " may not return any value."
     liftIO exitFailure
 
 retErr :: Debug -> String ->  StateT Env IO (Bool)
@@ -131,7 +130,7 @@ wrongTypeAss info = do
         liftIO exitFailure
 
 varRedeclaration :: Debug -> Ident -> StateT Env IO ()
-varRedeclaration info name =   do
+varRedeclaration info (Ident name) =   do
     liftIO $ putStrLn $ (show $ fromJust info) ++ ": Redeclaration of previously declared variable: "
-        ++ (show name)
+        ++ (name)
     liftIO exitFailure

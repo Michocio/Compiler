@@ -1,9 +1,13 @@
 module Main where
 
-import System.IO ( stdin, hGetContents )
-import System.Environment ( getArgs, getProgName )
+import System.IO ( stdin, hGetContents, hPutStr, stderr )
+import System.Environment ( getArgs, getProgName, getExecutablePath )
 import System.Exit ( exitFailure, exitSuccess )
 import Control.Monad (when)
+
+import System.FilePath
+import System.Process
+import Control.Monad.IO.Class
 
 import LexGrammar
 import ParGrammar
@@ -27,21 +31,26 @@ type Verbosity = Int
 putStrV :: Verbosity -> String -> IO ()
 putStrV v s = when (v > 1) $ putStrLn s
 
-runFile :: Verbosity -> ParseFun (Program (Maybe (Int, Int))) -> FilePath -> IO ()
-runFile v p f = putStrLn f >> readFile f >>= run v p
+runFile :: String -> Verbosity -> ParseFun (Program (Maybe (Int, Int))) -> FilePath -> IO ()
+runFile file v p f = putStrLn f >> readFile f >>= run file v p
 
-run :: Verbosity -> ParseFun (Program (Maybe (Int, Int))) -> String -> IO ()
-run v p s = let ts = myLLexer s in case p ts of
-           Bad s    -> do putStrLn "\nParse              Failed...\n"
+run :: String -> Verbosity -> ParseFun (Program (Maybe (Int, Int))) -> String -> IO ()
+run file v p s = let ts = myLLexer s in case p ts of
+           Bad s    -> do hPutStr stderr "ERROR\n"
+                          putStrLn "\nParse              Failed...\n"
                           putStrV v "Tokens:"
                           putStrV v $ show ts
                           putStrLn s
                           exitFailure
            Ok  tree -> do putStrLn "\nParse Successful!"
-                          showTree v tree
+                          --showTree v tree
                           frontEnd tree
                           controlGraph <- generateIntermediate tree
-                          generateAsm controlGraph
+                          hPutStr stderr "OK\n"
+                          generateLLVM file controlGraph
+                          liftIO $ readProcess "llvm-as" [(dropExtension file) ++ ".ll"] ""
+                          liftIO $ readProcess "llvm-link"
+                            ["-o", (dropExtension file ++ ".bc"), (dropExtension file) ++ ".ll", "lib/runtime.bc"] ""
                           exitSuccess
 
 
@@ -67,6 +76,6 @@ main = do
   args <- getArgs
   case args of
     ["--help"] -> usage
-    [] -> getContents >>= run 2 pProgram
-    "-s":fs -> mapM_ (runFile 0 pProgram) fs
-    fs -> mapM_ (runFile 2 pProgram) fs
+    [] -> getContents >>= run (head args) 2 pProgram
+    "-s":fs -> mapM_ (runFile (head args) 0 pProgram) fs
+    fs -> mapM_ (runFile (head args) 2 pProgram) fs
