@@ -1,3 +1,8 @@
+{-
+Module that generate final llvm code.
+It operates on intermediate code from middle level of project
+and writes to file final code.
+-}
 module BackEnd where
 
 
@@ -70,16 +75,11 @@ generateLLVM file p =  (liftIO $ evalStateT (backEnd file p) initialEnvBack)
 backEnd :: String -> [FunctionDef] -> StateT EnvBack IO ()
 backEnd file graph = do
     mapM writeToCode fundDelsCode
-
     mapM traverseFuns graph
-
-
     new_graph <- mapM changeCode graph
-
     (code, vars, funs, strs) <- get
     strings <- return $ map swap (M.toList strs)
-    liftIO $ putStrLn "MOJE STR"
-    liftIO $ putStrLn $ show strs
+
     mapping <- return $ map (\(nr, str) -> ("@.str." ++ (show nr) ++
          " = private constant [" ++ (show $ (length str) + 1) ++ " x i8] c\"" ++ ( str) ++ "\\00\"" )) strings
     mapM writeToCode mapping

@@ -1,3 +1,7 @@
+{-
+Module consists of all possible errors at the frontend surface.
+-}
+
 module FrontEndErrors where
 
 import Control.Monad.Writer

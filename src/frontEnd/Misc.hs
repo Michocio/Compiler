@@ -1,3 +1,7 @@
+{-
+Nothing interesting, just some helping functions.
+-}
+
 module Misc where
 
 

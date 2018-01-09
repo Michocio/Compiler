@@ -37,7 +37,7 @@ replaceBy  code  (src, dst) =
 
 changeRegs :: (Argument, Argument) -> Tuple -> Tuple
 changeRegs (src, dst) (AssOp, res, arg1, NIL) =
-    (AssOp,res, isDesiredArg src dst arg1 , NIL)
+    (AssOp, res, isDesiredArg src dst arg1 , NIL)
 changeRegs (src, dst) (Alloca t, arg1, res, arg3) =
     (Alloca t, arg1, res, arg3)
 changeRegs (src, dst) (Phi, res, SSA xs, a) =
@@ -55,9 +55,6 @@ addLife NIL = []
 addLife a@(Var x y z i) = [a]
 addLife a@(Reg x) = [a]
 addLife x = []
-
-
-
 
 removeDeadUsage :: [Argument] -> Tuple -> Maybe Tuple
 removeDeadUsage ok (AssOp, res, arg1, arg3) =
@@ -114,26 +111,32 @@ commonsSet (x@(AddOp, res, a, b):xs) m = do
     if(isJust $ M.lookup x m) then return m
     else do
         commonsSet xs (M.insert (AddOp, NIL, a, b) res m)
+commonsSet (x@(MulOp, res, a, b):xs) m = do
+    if(isJust $ M.lookup x m) then return m
+    else do
+        commonsSet xs (M.insert (MulOp, NIL, a, b) res m)
+commonsSet (x@(SubOp, res, a, b):xs) m = do
+    if(isJust $ M.lookup x m) then return m
+    else do
+        commonsSet xs (M.insert (SubOp, NIL, a, b) res m)
+commonsSet (x@(DivOp, res, a, b):xs) m = do
+    if(isJust $ M.lookup x m) then return m
+    else do
+        commonsSet xs (M.insert (DivOp, NIL, a, b) res m)
 commonsSet (x:xs) m = commonsSet xs m
 
 constOpt :: [[Tuple]] ->  StateT EnvMid IO [[Tuple]]
 constOpt code = do
     consts <- return $ foldr (++) [] (map (map constAss) code)
     pary <- return $ map (fromJust) (filter (isJust) consts)
-    --liftIO $ putStrLn "new"
-    --liftIO $ putStrLn $ show code
-    --liftIO $ putStrLn $ show pary
     blocks <- return $ map (correctCode pary) code
     return blocks
-
 
 
 copyOpt :: [[Tuple]] ->  StateT EnvMid IO [[Tuple]]
 copyOpt code = do
     copies <- return $ foldr (++) [] (map (map copyAss) code)
     pary <- return $ map (fromJust) (filter (isJust) copies)
-    --liftIO $ putStrLn "new"
-    --liftIO $ putStrLn $ show pary
     blocks <- return $ map (correctCode pary) code
     return blocks
 
@@ -213,6 +216,7 @@ compFun GEm = (>=)
 compFun EQUm = (==)
 compFun NEm = (/=)
 
+--zwijanie stalych
 constAss :: Tuple -> Maybe (Argument, Argument)
 constAss (AssOp, src, dst, _) =
     if(isConst dst) then Just (src, dst)

@@ -1,3 +1,7 @@
+{-
+Main module responsible for checking corretness of fronend surface.
+-}
+
 module FrontEnd where
 
 import Control.Monad.Writer

@@ -1,3 +1,6 @@
+{-
+Heloing functions for operating on types.
+-}
 module TypesStuff where
 
 import Control.Monad.Writer

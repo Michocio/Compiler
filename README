@@ -1,0 +1,12 @@
+Kompilator LATTE
+
+Michał Jaroń mj348711
+
+Generuje kod do LLVM. W celu przeprowadzenia optymalizacji tworze kod pośredni - kod czwórkowy, następnie przeprowadzam na nim optymalizacje.
+Zaimplementowałem wszystkie wspomniane przez Pana optymalizacje:
+-> zwijanie stałych
+-> propagacja kopii
+-> wspólne podwyrażenia - globalnie (dla wyrażen arytmetycznych, rozszerzenia na inne operacje to tylko copy paste)
+-> elminacja martwego kodu
+-> upraszczanie trywialnych warunków w ifach
+Kod generowany doo LLVM jest w formie SSA (używam phi). W obecnej wersji nie zaimplementowałem żadnyc dodatków, jednak frontend został napisany pod obsługę wszystkich dodatów (łącznie z metodami wirtualnymi, wykrywaniem cykli w dziedzieczniu, wyrkrywaniem dziwnych rzeczy przy przedefiniowaniu metod itp.). Program nie używa żadnych niestandardowych bilbiotek, kompiluje się makiem z korzenia pliku.

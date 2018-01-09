@@ -1,3 +1,7 @@
+{-
+Generates intermediate code from abstract syntex tree
+-}
+
 module IntermediateCode where
 
 
@@ -102,13 +106,13 @@ printCode = do
     sortedLabels <- showCode -- orginal code ordered
 
     (blocks, graph) <- createBlockGraph sortedLabels
-    --blocks - posortowane juz numerycznie, nie wzgledem kolejnosci
+    --blocks - already sorted
 
     labels_ordered <- return $ map fst (M.toList blocks)
     labels_orginal <- return $ reorderBlocks labels_ordered sortedLabels []
     nums <- return [0.. (length labels_ordered)]
     labels_mapped <- return $ M.fromList $ zip (sort labels_orginal) nums
-    --liftIO $ putStrLn $ show labels_mapped
+
     enumed <- mapM enumVars (M.toList blocks)
 
     neighbors <- return $ map snd (M.toList graph)
@@ -121,7 +125,7 @@ printCode = do
     (graph, _, _)<- return $ runIdentity $ execStateT (blockDfs 0 0) (tree, M.empty,M.empty)
     (_, codes, _, phis, _) <- return $ unzip5 $ map snd (M.toList graph)
     packed <-return $ zip3 labels_ordered (map M.toList phis) codes
-    --liftIO $ putStrLn $ show graph
+
 
     cor <- mapM createPhis packed
 
@@ -131,16 +135,10 @@ printCode = do
     k <- return $ map (map (removeDeadUsage b)) edited
     z <- return $ map ((filter isJust)) k
     zz <- return $ map (map fromJust) z
-    --liftIO $ putStrLn "KOD OK: "
-    --liftIO $ putStrLn $ show zz
-    --showBlocks labels_orginal labels_mapped zz
-    --removed <- return $ map (map removeDummyTuple) zz
-    --cleared <- return $ map (map (fromJust)) (map (filter (isJust)) removed)
-    showBlocks labels_orginal labels_mapped zz
+
     conds <- mapM (replaceIf []) zz
     alwaysBr <- mapM (addJumps) (zip conds neighbors)
-    --liftIO $ putStrLn "RRRRRRRRRRRRRRRRRRRR"
-    --liftIO $ mapM (mapM (print. printTuple))  alwaysBr
+
     final_code <- return $ M.fromList $ zip labels_ordered (zip alwaysBr neighbors)
     return (labels_orginal, final_code)
 
@@ -185,14 +183,6 @@ createPhis (block, phis, code) = do
     return $ (new_code )++ code
 
 
-    --edited <- doOpt (map snd (M.toList blocks))
-    {-liftIO $ putStrLn "xxxx"
-    liftIO $ mapM (mapM (print. printTuple)) edited
-    (a,b) <- return $ aliveVar ([],[]) (foldr (++) [] edited)
-    k <- return $ map (map (removeDeadUsage b)) edited
-    z <- return $ map ((filter isJust)) k
-    zz <- return $ map (map fromJust) z
-    --yy <- return $ map removeDeadCode zz-}
 type EnumEnv = (M.Map (String,Int) Int)
 
 enumVars :: (Int, [Tuple]) ->  StateT EnvMid IO ([Tuple])
@@ -261,7 +251,6 @@ countVars id_ arg = do
                     put(M.insert (name, nr) 0 s)
                     return $ (Var name nr 0 id_)
         otherwise -> return arg
-
 
 
 blockDfs :: Int -> Int -> State FinEnv ()
@@ -529,9 +518,6 @@ genStmt  to@(BStmt jak (Block a stmts)) = do
     (vars_, _, temps_, labs_, code_, labels_, _) <- get
     put(vars_, decls, temps_, labs_, code_, labels_, curr)
     if(jak /= Nothing) then do
-        liftIO $ putStrLn "PINODZDD IONIOFDFD INOFD"
-        liftIO $ putStrLn $ show stmts
-        liftIO $ putStrLn $ show to
         lEnd <- genLabel "l"
         return ()
     else return ()

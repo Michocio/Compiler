@@ -33,6 +33,7 @@ typeSize (Str a) = "i8*"
 typeSize (Bool a) = "i1"
 typeSize (Void a) = "void"
 typeSize _ = "i32"
+
 removeDummyTuple :: Tuple -> Maybe Tuple
 removeDummyTuple (EmptyOp, _, _, _) = Nothing
 removeDummyTuple (Alloca t, dst, _, _) = Nothing

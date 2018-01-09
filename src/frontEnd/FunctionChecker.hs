@@ -1,3 +1,7 @@
+{-
+Check constraints given for functions.
+-}
+
 module FunctionChecker where
 
 import Control.Monad.Writer

@@ -1,3 +1,7 @@
+{-
+Common file for all frontend' files.
+It defines and controls everything connected with nvironment.
+-}
 
 module Environment where
 import Control.Monad.Writer

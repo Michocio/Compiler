@@ -1,3 +1,8 @@
+{-
+In currect version classes aren't implemented
+but frontend has been made for further extensions.
+-}
+
 module ClassChecker where
 
 import Control.Monad.Writer
@@ -119,7 +124,7 @@ accMap ((parent, child):xs) map_ = do
             (Just x) ->
                 accMap xs (M.insert parent (child:x) map_)
             Nothing -> do
-                liftIO $ putStrLn "ERRRRO"
+                liftIO $ putStrLn "ERROR"
                 liftIO $ exitFailure
 
 
@@ -139,7 +144,7 @@ checkIfCycle parent fromQ visited tree node = do
     if(fromQ == True && (M.lookup node visited) == Just 1)  then return ()
     else do
         if((M.lookup node visited) == Just 1) then do
-            liftIO $ putStrLn $ show "CYKL " ++ (show node) ++ ", " ++ (show parent)
+            liftIO $ putStrLn $ show "CYCLE ERROR " ++ (show node) ++ ", " ++ (show parent)
             liftIO $ exitFailure
         else do
             updated <- return $ M.insert node 1 visited
@@ -159,8 +164,6 @@ perfomInheritance parent node = do
     (cFields, cMeths, p)<- getClassDef node
     newFields <- return $ M.union cFields pFields
     newMeths <- traverseMets (M.toList pMeths) cMeths
-    liftIO $ putStrLn " show cMeths"
-    liftIO $ putStrLn $ show cMeths
     updateClasses node (newFields, newMeths, p)
     return ()
 
@@ -180,7 +183,7 @@ checkParentDup (name, fun@(ret, args, Block a stmts)) mets = do
             child_def <- return $ (getType r, map (\(t, n) -> (getType t, Ident "")) b, Block c [])
             if(parent_def == child_def) then return $ M.insert name fun mets
             else do
-                liftIO $ putStrLn $ "DUPLIDFHDFHG"
+                liftIO $ putStrLn $ "ERROR"
                 liftIO $ exitFailure
         otherwise -> do
             return $ M.insert name fun mets
@@ -218,10 +221,6 @@ methodInfo (ClFun a type_ ident@(Ident funName) args block) =  do
 
 addMethodHelper :: Arg (Maybe (Int, Int)) -> (TypeD, Ident)
 addMethodHelper (Arg a type_ ident) = (type_, ident)
-
-
-
-
 
 
 methodChecker :: StateT Env IO ()

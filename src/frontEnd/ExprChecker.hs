@@ -1,3 +1,7 @@
+{-
+Checks if expressions are correct.
+-}
+
 module ExprChecker where
 
 import Control.Monad.Writer
@@ -31,8 +35,6 @@ exprType exp = case exp of
     EVar a lvalue -> do
         vars <- getVars
         (arr, name) <- return (identLValue lvalue)
-        liftIO $ putStrLn "OKKK"
-        liftIO $ putStrLn $ show vars
         case (M.lookup name vars) of
             (Just x) -> do
                 if(arr && (isArray x == False)) then notArray (getTypeInfo x) name

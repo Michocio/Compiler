@@ -1,3 +1,6 @@
+{-
+Statements correctness.
+-}
 module StmtChecker where
 
 import Control.Monad.Writer
@@ -29,7 +32,6 @@ import Misc
 
 doBlock :: Bool-> Env -> Ident -> Bool -> BlockD -> StateT Env IO Bool
 doBlock True env f ret block = do
-    liftIO $ putStrLn "BLOOOK"
     (vars, decls, funs, cl) <- get
     put(vars, M.empty, funs, cl)
     doBlock False (vars, decls, funs, cl) f ret block
@@ -37,7 +39,6 @@ doBlock start env _ ret (Block _ []) = do
         put env
         return ret
 doBlock start env funName ret (Block a (x:xs)) = do
-    liftIO $ putStrLn "BLOOOK2"
     newRet <- runStmt funName x
     if(ret == False) then doBlock False env funName newRet (Block a xs)
         else doBlock False env funName ret (Block a xs)
@@ -78,8 +79,6 @@ runStmt _ (SExp a expr) = do
     exprType expr
     return False
 runStmt _ (Decl a vType items) = do
-    liftIO $ putStrLn "DEKALRUJe"
-    liftIO $ putStrLn $ show items
     x <- mapM (itemOperator vType) items
     return False
 runStmt _ (Ass a lvalue expr) = do
@@ -88,8 +87,6 @@ runStmt _ (Ass a lvalue expr) = do
     if((getType lType) /=  getType rType) then wrongTypeAss a
     else return False
 runStmt fun (BStmt a block) = do
-    liftIO $ putStrLn "naprzod"
-    liftIO $ putStrLn $ show block
     doBlock True initialEnv fun False block
 runStmt _ (Incr a lvalue) = do
     varType <- exprType (EVar a lvalue)
@@ -108,9 +105,6 @@ isTrivial _ = (False, False)
 itemOperator :: TypeD -> Item (Maybe (Int, Int))-> StateT Env IO ()
 itemOperator t (NoInit info name) = do
     (vars, decls, funs, classes) <- get
-    liftIO $ putStrLn "ENV"
-    liftIO $ putStrLn  $ show name
-    liftIO $ putStrLn $ show decls
     case (M.lookup name decls) of
         (Just x) -> varRedeclaration info name
         (otherwise) -> do
