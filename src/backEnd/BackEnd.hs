@@ -78,8 +78,10 @@ backEnd file graph = do
 
     (code, vars, funs, strs) <- get
     strings <- return $ map swap (M.toList strs)
+    liftIO $ putStrLn "MOJE STR"
+    liftIO $ putStrLn $ show strs
     mapping <- return $ map (\(nr, str) -> ("@.str." ++ (show nr) ++
-         " = private constant [" ++ (show $ (length str) +1) ++ " x i8] c\"" ++ str ++ "\\00\"" )) strings
+         " = private constant [" ++ (show $ (length str) + 1) ++ " x i8] c\"" ++ ( str) ++ "\\00\"" )) strings
     mapM writeToCode mapping
 
     mapM (emitFunction) new_graph
@@ -101,8 +103,12 @@ extractStrings (op, arg1, arg2, arg3) =  do
 ifString :: Argument -> StateT EnvBack IO ()
 ifString (ValStr str) = do
     (code, vars, funs, strs) <- get
-    num <- return $ M.size strs
-    put(code, vars, funs, M.insert str num strs)
+    if(isJust $ M.lookup str strs) then return ()
+    else do
+        num <- return $ M.size strs
+        put(code, vars, funs, M.insert (str) num strs)
+        (code, vars, funs, strs) <- get
+        return ()
 ifString _ = return ()
 
 changeCode :: FunctionDef -> StateT EnvBack IO (FunctionDef)
@@ -166,7 +172,7 @@ changeBlock  me g t code = do
 changeCast :: Tuple -> StateT EnvBack IO Tuple
 changeCast (BitCast, res, len, GlobalVar s) = do
     (code, vars, funs, str) <- get
-    (Just x) <- return $ M.lookup s str
+    (Just x) <- return $ M.lookup (s) str
     return (BitCast, res, len, GlobalVar $ ".str." ++ (show x))
 changeCast z = return z
 
@@ -174,7 +180,7 @@ traverseFuns :: FunctionDef -> StateT EnvBack IO ()
 traverseFuns (ident@(Ident name), type_, params, order, code_) = do
     (code, vars, funs, str) <- get
     codes <- return $ map fst (map snd (M.toList code_))
-    put(code, vars, M.insert ident type_ funs, str)
+    put(code, vars, M.insert ident (rawType type_) funs, str)
     --mapM traverseAllocs codes
     return ()
 
@@ -196,16 +202,15 @@ staticType (ValStr _) = return $ Str Nothing
 changeCalls :: (Type (Maybe(Int, Int))) -> ([Tuple], [Tuple]) -> [(Type (Maybe(Int, Int)), Argument)] -> StateT EnvBack IO ([Tuple])
 changeCalls t ([], new_code) _ = return new_code
 changeCalls t ((instr@(AddOp, res, arg1, arg2):xs),new_code) params = do
-    liftIO $ putStrLn $ show arg1
-    liftIO $ putStrLn "oooooo"
     (code, vars, funs, str) <- get
-    --liftIO $ putStrLn $ show vars
-    if(ifVar arg1) then do
-        if(not $ isJust $ M.lookup arg1 vars ) then
+    if(ifVar res) then do
+        found <- lookForVar res
+        if(not $ isJust $ found) then
             changeCalls t (xs, new_code ++ [instr]) []
         else do
-            (Just type_) <- return $ M.lookup arg1 vars
-            put(code, M.insert res type_ vars, funs, str)
+            found <- lookForVar res
+            (Just type_) <- return $ found
+            --put(code, M.insert res type_ vars, funs, str)
             if(type_ == (Str Nothing)) then do
                 new_instr <- return $ (CONCAT, res, arg1, arg2)
                 changeCalls t (xs, new_code ++ [new_instr]) []
@@ -213,13 +218,13 @@ changeCalls t ((instr@(AddOp, res, arg1, arg2):xs),new_code) params = do
                 new_instr <- return $ (AddOp, res, arg1, arg2)
                 changeCalls t (xs, new_code ++ [new_instr]) []
     else do
-        case (arg1) of
+        case (res) of
             (Reg nr) -> do
-                if(not $ isJust $ M.lookup arg1 vars ) then
+                if(not $ isJust $ M.lookup res vars ) then
                     changeCalls t (xs, new_code ++ [instr]) []
                 else do
-                    (Just type_) <- return $ M.lookup arg1 vars
-                    put(code, M.insert res type_ vars, funs, str)
+                    (Just type_) <- return $ M.lookup res vars
+                    --put(code, M.insert res type_ vars, funs, str)
                     if(type_ == (Str Nothing)) then do
                         new_instr <- return $ (CONCAT, res, arg1, arg2)
                         changeCalls t (xs, new_code ++ [new_instr]) []
@@ -227,8 +232,8 @@ changeCalls t ((instr@(AddOp, res, arg1, arg2):xs),new_code) params = do
                         new_instr <- return $ (AddOp, res, arg1, arg2)
                         changeCalls t (xs, new_code ++ [new_instr]) []
             otherwise -> do
-                (type_) <- return $ typeLLVM arg1
-                put(code, M.insert res type_ vars, funs, str)
+                (type_) <- return $ typeLLVM res
+                put(code, M.insert res (rawType type_) vars, funs, str)
                 if(type_ == (Str Nothing)) then do
                     new_instr <- return $ (CONCAT, res, arg1, arg2)
                     changeCalls t (xs, new_code ++ [new_instr]) []
@@ -242,15 +247,17 @@ changeCalls t ((instr@(CallOp, (Fun name), res, NIL):xs),new_code) params = do
     (code, vars, funs, str) <- get
     (Just type_) <- return $ M.lookup (Ident name) funs
     new_instr <- return $ (CallFun type_, res, Fun name, Args params)
-    put(code, M.insert res type_ vars, funs, str)
+    put(code, M.insert res (rawType type_) vars, funs, str)
     changeCalls t (xs, new_code ++ [new_instr]) []
 changeCalls t ((instr@(Icmp how, res, arg1, arg2):xs),new_code) params = do
     (code, vars, funs, str) <- get
     if(ifVar arg1) then do
-        if(not $ isJust $ M.lookup arg1 vars ) then
+        found <- lookForVar arg1
+        if(not $ isJust $ found) then
             changeCalls t (xs, new_code ++ [instr]) []
         else do
-            (Just type_) <- return $ M.lookup arg1 vars
+            found <- lookForVar arg1
+            (Just type_) <- return $ found
             new_instr <- return $ (IcmpTyped type_ how, res, arg1, arg2)
             changeCalls t (xs, new_code ++ [new_instr]) []
     else do
@@ -268,12 +275,24 @@ changeCalls t ((instr@(Icmp how, res, arg1, arg2):xs),new_code) params = do
                 changeCalls t (xs, new_code ++ [new_instr]) []
 changeCalls t ((instr@(Phi, res, SSA phis, NIL):xs), new_code) params = do
     (code, vars, funs, str) <- get
-    if(not $ isJust $ M.lookup res vars ) then
-        changeCalls t (xs, new_code ++ [instr]) []
+    if(ifVar res) then do
+        found <- lookForVar res
+        if(not $ isJust $ found) then
+            changeCalls t (xs, new_code ++ [instr]) []
+        else do
+            found <- lookForVar res
+            (Just type_) <- return $ found
+            new_instr <- return $ (PhiTyped type_, res, SSA phis, NIL)
+            changeCalls t (xs, new_code ++ [new_instr]) []
     else do
-        (Just type_) <- return $ M.lookup res vars
-        new_instr <- return $ (PhiTyped type_, res, SSA phis, NIL)
-        changeCalls t (xs, new_code ++ [new_instr]) []
+        found <- return $ M.lookup res vars
+        if(not $ isJust $ found) then
+            changeCalls t (xs, new_code ++ [instr]) []
+        else do
+            found <- return $ M.lookup res vars
+            (Just type_) <- return $ found
+            new_instr <- return $ (PhiTyped type_, res, SSA phis, NIL)
+            changeCalls t (xs, new_code ++ [new_instr]) []
 changeCalls t (((RetOp, a, NIL, NIL):xs), new_code) params =
     return $ new_code ++ [(RetOpTyped t, a, NIL, NIL)]
 changeCalls t ((x:xs),new_code) params = do
@@ -281,12 +300,30 @@ changeCalls t ((x:xs),new_code) params = do
 
 traverseAllocs :: [Tuple] -> StateT EnvBack IO ()
 traverseAllocs [] = return ()
-traverseAllocs ((Alloca t, var, NIL, NIL):xs) = do
+traverseAllocs ((Alloca t, (Var name nr _ _), NIL, NIL):xs) = do
     (code, vars, funs, str) <- get
-    put(code, M.insert var t vars, funs, str)
+    put(code, M.insert (Var name nr 0 0) (rawType t) vars, funs, str)
     traverseAllocs xs
-traverseAllocs ((op@AddOp, res, a1, a2):xs) = do
+traverseAllocs ((op@AddOp, var, val, a2):xs) = do
     (code, vars, funs, str) <- get
+    if(ifVar val) then do
+        found <- lookForVar val
+        if(not $ isJust $ found) then return ()
+        else do
+            (Just type_) <- return $ found
+            put(code, M.insert var (rawType type_) vars, funs, str)
+            return ()
+    else do
+        case (val) of
+            (Reg nr) -> do
+                if(not $ isJust $ M.lookup val vars) then return ()
+                else do
+                    (Just type_) <- return $ M.lookup val vars
+                    put(code, M.insert var (rawType type_) vars, funs, str)
+            otherwise -> do
+                (type_) <- return $ typeLLVM val
+                put(code, M.insert var (rawType type_) vars, funs, str)
+        return ()
     --put(code, M.insert res (Int Nothing) vars, funs, str)
     traverseAllocs xs
 traverseAllocs ((op@SubOp, res, a1, a2):xs) = do
@@ -301,6 +338,14 @@ traverseAllocs ((op@ModOp, res, a1, a2):xs) = do
     (code, vars, funs, str) <- get
     put(code, M.insert res (Int Nothing) vars, funs, str)
     traverseAllocs xs
+traverseAllocs ((op@NotOp, res, a1, a2):xs) = do
+    (code, vars, funs, str) <- get
+    put(code, M.insert res (Bool Nothing) vars, funs, str)
+    traverseAllocs xs
+traverseAllocs ((op@NegOp, res, a1, a2):xs) = do
+    (code, vars, funs, str) <- get
+    put(code, M.insert res (Int Nothing) vars, funs, str)
+    traverseAllocs xs
 traverseAllocs ((op@DivOp, res, a1, a2):xs) = do
     (code, vars, funs, str) <- get
     put(code, M.insert res (Int Nothing) vars, funs, str)
@@ -309,14 +354,20 @@ traverseAllocs ((BitCast, res, len, GlobalVar s):xs) = do
     (code, vars, funs, str) <- get
     put(code, M.insert res (Str Nothing) vars, funs, str)
     traverseAllocs xs
+traverseAllocs (instr@(CallOp, (Fun name), res, NIL):xs) = do
+    (code, vars, funs, str) <- get
+    (Just type_) <- return $ M.lookup (Ident name) funs
+    put(code, M.insert res (rawType type_) vars, funs, str)
+    traverseAllocs xs
 traverseAllocs ((Phi, var, SSA a, b):xs) = do
     (code, vars, funs, str) <- get
     (From _ val) <- return $ head a
     if(ifVar val) then do
-        if(not $ isJust $ M.lookup val vars) then return ()
+        found <- lookForVar val
+        if(not $ isJust $ found) then return ()
         else do
-            (Just type_) <- return $ M.lookup val vars
-            put(code, M.insert var type_ vars, funs, str)
+            (Just type_) <- return $ found
+            put(code, M.insert var (rawType type_) vars, funs, str)
             return ()
     else do
         case (val) of
@@ -324,13 +375,19 @@ traverseAllocs ((Phi, var, SSA a, b):xs) = do
                 if(not $ isJust $ M.lookup val vars) then return ()
                 else do
                     (Just type_) <- return $ M.lookup val vars
-                    put(code, M.insert var type_ vars, funs, str)
+                    put(code, M.insert var (rawType type_) vars, funs, str)
             otherwise -> do
                 (type_) <- return $ typeLLVM val
-                put(code, M.insert var type_ vars, funs, str)
+                put(code, M.insert var (rawType type_) vars, funs, str)
         return ()
     traverseAllocs xs
 traverseAllocs (x:xs) = traverseAllocs xs
+
+
+lookForVar :: Argument ->  StateT EnvBack IO (Maybe (Type (Maybe(Int, Int))))
+lookForVar (Var name nr _ _) = do
+    (code, vars, funs, str) <- get
+    return $ M.lookup (Var name nr 0 0) vars
 
 emitFunction :: FunctionDef -> StateT EnvBack IO ()
 emitFunction ((Ident name), type_, params, order, code) = do

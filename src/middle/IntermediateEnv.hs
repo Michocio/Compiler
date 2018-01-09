@@ -48,6 +48,12 @@ typeLLVM (ValBool b) = (Bool Nothing)
 typeLLVM (ValStr s) = (Str Nothing)
 typeLLVM (ValVoid) = (Void Nothing)
 
+rawType :: Type (Maybe (Int, Int)) -> Type (Maybe (Int, Int))
+rawType (Int x) =(Int Nothing)
+rawType (Bool x) =(Bool Nothing)
+rawType (Str x) =(Str Nothing)
+rawType (Void x) =(Void Nothing)
+
 showBlocks :: [Int] -> M.Map Int Int -> [[Tuple]] -> StateT EnvMid IO ()
 showBlocks [] _ _ = return ()
 showBlocks (x:xs) map_ code = do
@@ -296,9 +302,9 @@ printTuple (op@MulOp, res, a1, a2)  =  "     " ++
 printTuple (op@ModOp, res, a1, a2)  =  "     " ++
     (printArg res) ++ " = srem i32 " ++(printArg a1) ++ ", " ++ (printArg a2)
 printTuple (op@NegOp, res, a1, a2)  =  "     " ++
-    (printArg res) ++ " = xor i1" ++ (printArg a1) ++ ", " ++(printArg a2)
+    (printArg res) ++ " = mul i32 " ++ (printArg a1) ++ ", " ++(printArg a2)
 printTuple (op@NotOp, res, a1, a2)  =  "     " ++
-    (printArg res) ++ " = mul i32" ++ (printArg a1) ++  ", "  ++ (printArg a2)
+    (printArg res) ++ " = xor i1 " ++ (printArg a1) ++  ", "  ++ (printArg a2)
 printTuple (op@GotoOp, a1, _, _) =  "     " ++
     "br label " ++ (printArg a1)
 printTuple (op@ParamOp, a1, _, _) =  "     " ++(show op)++ " " ++(printArg a1)
