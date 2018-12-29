@@ -1,6 +1,6 @@
 Kompilator LATTE
 
-Michał Jaroń mj348711
+Michał Jaroń
 
 Generuje kod do LLVM. W celu przeprowadzenia optymalizacji tworze kod pośredni - kod czwórkowy, następnie przeprowadzam na nim optymalizacje.
 Zaimplementowałem wszystkie wspomniane przez Pana optymalizacje:
